@@ -1,0 +1,2675 @@
+Hardware Specification                                     RTL2832U-R828D
+Informational                                              September 2026
+
+
+                    RTL2832U + R828D SDR Receiver
+              Hardware Specification (Reverse-Engineered)
+
+
+Status of This Memo
+
+   This document is an independently-authored, vendor-neutral hardware
+   specification.  It is NOT an IETF work product, has not been
+   submitted to or reviewed by the IETF, and carries no RFC number; the
+   document header format is used here only as an organizational
+   convention.  It is not affiliated with, endorsed by, or reviewed by
+   Realtek Semiconductor Corp., Rafael Micro, or RTL-SDR Blog.  All
+   product and company names are used for identification purposes
+   only.  Distribution of this document is unlimited.
+
+Abstract
+
+   This document specifies the observable hardware behavior of a USB
+   software-defined-radio (SDR) receiver built around a Realtek
+   RTL2832U demodulator/USB-bridge integrated circuit paired with a
+   Rafael Micro R828D tuner integrated circuit, in the configuration
+   used on the RTL-SDR Blog V4 receiver.  It describes USB transport
+   framing, register addresses, bit fields, timing, and control
+   arithmetic in prose, tables, and formulas, to a level of detail
+   sufficient for an independent implementation, with no prior access
+   to any existing implementation's source required.  No source code,
+   source comments, or source-project identifiers are reproduced in
+   this document.
+
+Table of Contents
+
+   1.  Introduction
+   2.  Requirements Language
+   3.  Terminology
+   4.  Device Identity
+   5.  USB Transport and Register Access Protocol
+     5.1.  Addressable Register Blocks
+     5.2.  Generic Block Register Access
+     5.3.  I2C Bus Pass-Through (Block 6)
+     5.4.  Demodulator Paged-Register Access
+     5.5.  EEPROM Access
+     5.6.  EEPROM Content Layout
+   6.  Device Open / Enumeration Sequence
+   7.  RTL2832U Demodulator Core
+     7.1.  Baseband Initialization Sequence
+     7.2.  Channel (Decimation) FIR Filter
+     7.3.  IF Frequency / Spectrum Inversion
+     7.4.  Crystal Frequency and PPM Correction
+     7.5.  Sample Rate (Resampler Ratio)
+     7.6.  Test Mode / Internal AGC Mode
+     7.7.  Direct Sampling Mode
+     7.8.  Offset Tuning
+     7.9.  GPIO and Auxiliary I/O
+   8.  Tuner Detection Sequence
+   9.  I2C-Layer Tuner Control API
+   10. R820T/R828D Tuner: Register Map and Behavior
+     10.1. Identification
+     10.2. Register Map
+     10.3. PLL / Frequency Synthesizer
+     10.4. RF Front-End Band Table
+     10.5. IF / Baseband Filter Bandwidth Control
+     10.6. Gain Control (LNA, Mixer, IF/VGA)
+     10.7. R828D-Specific RF Input Switching (Non-Blog-V4 Boards)
+     10.8. R820T vs. R828D Summary
+     10.9. Standby / Power-Down Sequence
+     10.10. Power-Up Initialization Sequence
+     10.11. Demodulator-Side Reconfiguration on R828D Detection
+   11. RTL-SDR Blog V4 Board-Specific Behavior
+     11.1. Crystal Reference Override
+     11.2. HF Upconversion
+     11.3. Front-End Notch Filters
+     11.4. Three-Way RF Input Switching
+     11.5. Fixed VGA Gain
+   12. Bulk Sample Streaming
+   13. Timing Constants
+   14. End-to-End Operation Walkthrough
+   15. Implementation Notes and Open Issues
+   16. Security Considerations
+   17. References
+     17.1. Normative References
+     17.2. Informative References
+   Author's Address
+
+
+1.  Introduction
+
+   This document specifies the register-level and protocol-level
+   behavior of a USB SDR receiver comprising a Realtek RTL2832U
+   demodulator/USB-bridge integrated circuit and a Rafael Micro R828D
+   tuner integrated circuit, as fitted to the RTL-SDR Blog V4 receiver.
+   It is written to enable independent reimplementation: register
+   addresses, bit fields, timing, and control arithmetic are described
+   in plain language, tables, and formulas, derived from observation of
+   an existing implementation's on-the-wire behavior.  No source code,
+   source comments, or source-project identifiers (function, variable,
+   macro, or structure names) from that implementation are reproduced
+   anywhere in this document.  An implementer following this
+   specification is not expected to have read, and SHOULD NOT need to
+   read, that implementation's source.
+
+   The scope of this document is:
+
+   o  The RTL2832U demodulator core: USB transport, register access,
+      baseband/demodulator configuration, and sample streaming.
+
+   o  The R828D tuner signal path, including board-specific behavior
+      unique to the RTL-SDR Blog V4.
+
+   Other tuner families supported by the wider device ecosystem
+   (Elonics E4000, Fitipower FC0012, Fitipower FC0013, FCI FC2580) are
+   mentioned only to the extent needed to describe the shared tuner
+   detection sequence (Section 8); their internal register maps are
+   out of scope for this document.
+
+   Facts in this document marked "(Unverified)" are inferences drawn
+   from observed behavior that could not be independently confirmed
+   against a manufacturer datasheet or a hardware capture.  They are
+   flagged explicitly rather than presented as settled fact; see also
+   Section 15.
+
+2.  Requirements Language
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in
+   BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+   In this document these key words describe hardware and protocol
+   behavior that has been directly observed, not aspirational design
+   goals.  A "MUST" denotes a step that observed behavior shows to be
+   required for correct operation (e.g. a register write that silently
+   fails to take effect if a companion step is skipped); a "SHOULD"
+   denotes a step that is safe to omit only with a specific
+   understood trade-off; a "MAY" denotes optional or configurable
+   behavior.
+
+3.  Terminology
+
+   Demodulator (Demod)
+      The RTL2832U integrated circuit.  Combines a USB device
+      controller, two analog-to-digital converters (ADCs), a digital
+      down-converter (DDC), and register logic for controlling both
+      itself and, via an onboard I2C bridge, an external tuner
+      integrated circuit.
+
+   Tuner
+      The Rafael Micro R828D integrated circuit.  An RF front end
+      containing a low-noise amplifier (LNA), mixer, local-oscillator
+      (LO) frequency synthesizer, IF (intermediate frequency) filter,
+      and IF variable-gain amplifier (VGA), controlled over I2C.
+
+   Demodulator Register Page
+      One of at least two independently-addressed banks of registers
+      inside the demodulator's own register file (Section 5.4).  A
+      register address is only meaningful within the page under which
+      it was written; the page number MUST be supplied on every
+      access.
+
+   I2C Repeater
+      A gateway inside the demodulator that MUST be explicitly enabled
+      before the tuner's I2C bus becomes reachable from the USB host
+      (Section 5.3).
+
+   Local-Oscillator (LO) Frequency
+      The frequency the tuner's frequency synthesizer is actually
+      programmed to produce.  Distinct from the requested RF
+      frequency; derived from it per the procedure in Section 10.3.
+
+   Delivered IF (Intermediate Frequency)
+      The fixed offset frequency at which the tuner presents its
+      downconverted output to the demodulator, determined by the
+      currently selected channel-filter bandwidth (Section 10.5).
+
+   Board Identity
+      A software-determined classification of which physical product
+      the demodulator and tuner are mounted on, determined by string
+      comparison against USB descriptor strings (Section 4).  The
+      RTL-SDR Blog V4 is one such identified board; behavior specific
+      to it is documented in Section 11 and is conditional on this
+      identification succeeding.
+
+   Delivered IF Center, IF Band-Center Offset, Sideband
+      See Section 10.3 and Section 9 for their precise roles in the
+      local-oscillator frequency derivation.
+
+
+4.  Device Identity
+
+   +----------------+---------------------------------------------------+
+   | Property       | Value                                             |
+   +----------------+---------------------------------------------------+
+   | USB Vendor ID  | 0x0BDA                                            |
+   | USB Product ID | 0x2838 ("Generic RTL2832U OEM" variant; 0x2832 is |
+   |                | the other common Product ID for the same silicon) |
+   | USB interface  | Interface 0, single bulk IN endpoint for sample   |
+   |                | data                                              |
+   | Demodulator    | Realtek RTL2832U                                  |
+   | chip           |                                                   |
+   | Tuner chip     | Rafael Micro R828D, I2C address 0x74 (8-bit form; |
+   |                | 0x3A 7-bit)                                       |
+   | Board          | Software-only: read standard USB                  |
+   | identification | manufacturer/product string descriptors and       |
+   |                | compare (exact, case-sensitive) against           |
+   |                | "RTLSDRBlog" / "Blog V4".  No dedicated vendor    |
+   |                | descriptor or EEPROM parsing is used for this -   |
+   |                | the strings are ordinary USB string descriptors   |
+   |                | populated at manufacturing time.                  |
+   | Reference      | 28.8 MHz TCXO, shared between the demodulator and |
+   | oscillator     | the tuner (this board's defining deviation from a |
+   |                | stock R828D design, which normally pairs a 16 MHz |
+   |                | tuner crystal with the demodulator's own 28.8 MHz |
+   |                | crystal)                                          |
+   +----------------+---------------------------------------------------+
+
+                     Table 1: Device Identity Summary
+
+
+5.  USB Transport and Register Access Protocol
+
+   All non-streaming communication uses USB vendor-class control
+   transfers (bmRequestType vendor, bRequest always 0, 300 ms
+   timeout).  Three distinct addressing schemes share this one
+   transport mechanism, distinguished by how the control transfer's
+   wIndex/wValue fields are constructed.
+
+5.1.  Addressable Register Blocks
+
+   A one-byte block selector chooses which internal address space a
+   generic read or write targets:
+
+   +----------------------------------------------------------+-----+
+   | Block (Functional Name)                                  | No. |
+   +----------------------------------------------------------+-----+
+   | Demodulator (legacy flat access; superseded for register | 0   |
+   | work by the paged scheme of Section 5.4)                 |     |
+   | USB core                                                 | 1   |
+   | System / GPIO                                            | 2   |
+   | Tuner (unused directly -- I2C block used instead)        | 3   |
+   | EEPROM                                                   | 4   |
+   | Infrared (aliased into the system block's address space, | 5   |
+   | see below)                                               |     |
+   | I2C bus                                                  | 6   |
+   +----------------------------------------------------------+-----+
+
+                    Table 2: Register Block Selectors
+
+5.2.  Generic Block Register Access
+
+   The wValue and wIndex fields of the control transfer are used as
+   follows:
+
+     0                   1
+     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5
+    +-------------------------------+
+    |   wValue (register address)   |
+    +-------------------------------+
+    +---------------+-----+-+-------+
+    | block number  | res |W|  res  |
+    +---------------+-----+-+-------+
+     wValue (16 bits)      wIndex (16 bits)
+
+    W = write flag: 0 for read, 1 for write (bit 0x10 of wIndex).
+    "block number" occupies wIndex bits [15:8]; "res" marks reserved
+    (zero) bits.
+
+               Figure 1: Generic Block Register Access Fields
+
+   o  wValue = target register address (16 bits).
+
+   o  wIndex = (block number << 8), with bit 0x10 additionally set
+      for a write.
+
+   o  Special case: the infrared block (block 5) is NOT addressed
+      directly.  An access to it MUST instead force wIndex to
+      (system-block-number << 8) | 0x01 for reads, or | 0x11 for
+      writes -- i.e. it is wired up as a sub-page of the system block
+      rather than as a first-class block.
+
+   o  wLength = 1 or 2 bytes for scalar access; an array-style variant
+      moves an arbitrary short byte buffer using the same
+      wIndex/wValue scheme.
+
+   o  Byte-order asymmetry (implementers SHOULD independently verify
+      this before relying on it -- see Section 15, item 1): a 2-byte
+      write sends the two bytes big-endian (high byte first) in the
+      transfer's data stage, but a 2-byte read reassembles the two
+      returned bytes little-endian (first byte received = low byte).
+      This is observed device behavior, not a documentation error; an
+      implementation targeting wire compatibility with existing host
+      software MUST replicate this asymmetry, while a from-scratch
+      design MAY instead pick one consistent byte order throughout.
+
+5.3.  I2C Bus Pass-Through (Block 6)
+
+   o  Uses the array-style transfer of Section 5.2 with the block
+      fixed to 6.
+
+   o  wValue holds the I2C slave address in 8-bit form -- the 7-bit
+      address already shifted left by one bit, with the read/write
+      bit fixed at 0 (e.g. the R828D's 7-bit address 0x3A is issued on
+      the wire as 0x74).
+
+   o  A single-register I2C read MUST be performed as two back-to-back
+      control transfers: an OUT array-write of a 1-byte register
+      offset to the slave, followed by a separate IN array-read of the
+      requested byte count.  This is a write-then-read using two
+      independent USB transactions, not a true I2C repeated-start; the
+      bridge hardware inside the demodulator holds the I2C bus between
+      the two transactions.
+
+   o  Arbitrary-length I2C burst writes and reads use the same
+      mechanism with a longer buffer; this is used, for example, for
+      the tuner's block register loads (Section 10.10).
+
+   o  I2C repeater gating is mandatory.  The demodulator sits between
+      the USB host and the tuner's I2C bus; its internal repeater
+      gateway MUST be explicitly enabled before the tuner's I2C
+      address becomes reachable at all.  This is not a separate
+      register -- it reuses the demodulator soft-reset register
+      described in Section 7.1 (page 1, address 0x01): writing 0x18
+      enables the repeater, 0x10 disables it.  Every tuner-facing I2C
+      transaction MUST be bracketed by enable/disable, and concurrent
+      access from multiple threads MUST be serialized, since the
+      repeater state is shared, global, chip-wide state.
+
+5.4.  Demodulator Paged-Register Access
+
+   The demodulator's own register file (used for essentially all
+   baseband configuration, distinct from the block-0 legacy path of
+   Section 5.1) is addressed by a distinct scheme:
+
+     0                   1
+     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5
+    +---------------+---------------+
+    |  reg address  | 0x20 (marker) |
+    +---------------+---------------+
+    +---------------------+-+-------+
+    |      reserved       |R| page  |
+    +---------------------+-+-------+
+     wValue (16 bits)      wIndex (16 bits)
+
+    wValue = (register address << 8) | 0x20 (fixed marker byte).
+    wIndex bit 0x10 (R) = 0 for read, 1 for write; low 4 bits = page
+    number.
+
+           Figure 2: Demodulator Paged-Register Access Fields
+
+   o  wValue = (register address << 8) | 0x20 -- the low byte of the
+      value field is a fixed marker byte (0x20); the register address
+      occupies the upper byte.
+
+   o  wIndex = the demodulator page number for a read; for a write,
+      wIndex = 0x10 | page number.
+
+   o  At least two pages exist (0 and 1) and are exercised by this
+      specification.  A register address is only meaningful within the
+      page under which it was written -- the page MUST be supplied on
+      every single access; there is no separate "select current page"
+      register.
+
+   o  Every paged-register write MUST be followed by a fixed dummy
+      read (page 0x0A, address 0x01, 1 byte, result discarded).  This
+      acts as a required commit/flush step after each write for the
+      write to take reliable effect.  An implementation MUST perform
+      an equivalent no-op read after every demodulator register
+      write.
+
+   o  Byte order for 1- or 2-byte scalar access follows the same
+      asymmetric pattern as Section 5.2 (big-endian out, little-endian
+      reassembly on read).
+
+5.5.  EEPROM Access
+
+   o  Reachable as an I2C device at 7-bit address 0x50 (8-bit form
+      0xA0) through the I2C mechanism of Section 5.3, not through the
+      dedicated EEPROM block number of Table 2.
+
+   o  Total addressable size: 256 bytes.
+
+   o  Read: one control transfer writes a single address-pointer byte,
+      followed by one 1-byte read transfer per byte requested -- there
+      are no burst reads; every byte is its own USB transaction.
+
+   o  Write: byte-by-byte.  Before writing each byte, the current
+      value at that address SHOULD be read back and the write skipped
+      if it already matches, to avoid unnecessary EEPROM wear.  A
+      5 ms delay MUST follow any byte that is actually written, to
+      respect the EEPROM part's write-cycle settling time.
+
+5.6.  EEPROM Content Layout
+
+   The 256-byte EEPROM (Section 5.5) has a fixed byte layout, read and
+   written by a companion configuration tool rather than by the core
+   device-access code path itself.
+
+    Byte offset:  0         2         4         6    7    8
+                 +---------+---------+---------+----+----+
+                 | 0x28 32 |   VID   |   PID   | SN |CFG |
+                 +---------+---------+---------+----+----+
+
+    Byte offset:  8    9                               78   79
+                 +----+-------------------------------+----+
+                 |0x02|3 packed USB string descriptors| IR |
+                 +----+-------------------------------+----+
+
+                Figure 3: EEPROM Content Layout (First 79 Bytes)
+
+   +--------+-------+---------------------------------------------------+
+   | Offset | Size  | Content                                           |
+   +--------+-------+---------------------------------------------------+
+   | 0-1    | 2     | Fixed header magic: 0x28, 0x32                    |
+   |        | bytes |                                                   |
+   | 2-3    | 2     | USB Vendor ID, little-endian                      |
+   |        | bytes |                                                   |
+   | 4-5    | 2     | USB Product ID, little-endian                     |
+   |        | bytes |                                                   |
+   | 6      | 1     | Serial-number-descriptor enable flag: 0xA5 =      |
+   |        | byte  | enabled, 0x00 = disabled (controls whether the    |
+   |        |       | device exposes a serial-number USB string         |
+   |        |       | descriptor at all)                                |
+   | 7      | 1     | Config flags byte: bit 0 = remote-wakeup enable,  |
+   |        | byte  | bit 1 = IR-endpoint enable, remaining bits fixed  |
+   |        |       | at a base value of 0x14                           |
+   | 8      | 1     | Fixed value 0x02.  (Unverified) -- not otherwise  |
+   |        | byte  | explained in the code path that writes it; likely |
+   |        |       | a layout/format version marker.                   |
+   | 9-77   | up to | Three back-to-back USB string descriptors,        |
+   |        | 69    | standard binary format, packed in this fixed      |
+   |        | bytes | order: manufacturer, product, serial.  Each       |
+   |        |       | descriptor is [length byte] [0x03 type            |
+   |        |       | marker][UTF-16LE characters], where length counts |
+   |        |       | the whole descriptor including its 2-byte header. |
+   |        |       | The tooling that writes this table only ever      |
+   |        |       | emits the low byte of each UTF-16 code unit (the  |
+   |        |       | high byte is always 0x00) -- i.e. it only         |
+   |        |       | supports ASCII content in these strings, despite  |
+   |        |       | the on-wire format nominally being UTF-16LE.  The |
+   |        |       | three descriptors MUST fit within this 69-byte    |
+   |        |       | window combined; writing MUST fail with a         |
+   |        |       | truncation error if they do not.                  |
+   | 78     | 1     | Fixed to 0x00 in every generated layout: an       |
+   |        | byte  | IR-configuration-block length byte, always        |
+   |        |       | written as "no IR config" regardless of whether   |
+   |        |       | the IR-endpoint- enable flag at offset 7 is set.  |
+   | 79-255 | up to | Not written by the layout described here;         |
+   |        | 177   | content/meaning not determined from this pass     |
+   |        | bytes | (see Section 15, item 2).                         |
+   +--------+-------+---------------------------------------------------+
+
+                  Table 3: EEPROM Content Layout Detail
+
+   This layout is read back by comparing the header magic at offsets
+   0-1, then decoding the three string descriptors in order -- this is
+   exactly the manufacturer/product string pair that board
+   identification (Section 4, Section 8) matches against "RTLSDRBlog"
+   / "Blog V4".
+
+
+6.  Device Open / Enumeration Sequence
+
+   1.  Enumerate USB devices, match against the Vendor ID/Product ID
+       pair of Section 4, select by index.
+
+   2.  Open the device handle, release any competing kernel driver
+       bound to interface 0, claim interface 0.
+
+   3.  Liveness probe: write 0x09 (1 byte) to the USB-core
+       system-control register purely to confirm the device responds;
+       a full USB device reset is the fallback recovery path if this
+       fails.
+
+   4.  Run the baseband/demodulator bring-up sequence (Section 7.1).
+
+   5.  Read the USB manufacturer and product string descriptors
+       (needed for the board-identity string match of Section 4).
+
+   6.  Enable the I2C repeater (Section 5.3) and probe for a tuner
+       chip, trying candidates in a fixed priority order and stopping
+       at the first match (full detail in Section 8).  For this
+       specification's target device, the match is the R828D at I2C
+       address 0x74.
+
+   7.  Once identified, apply a block of tuner-family-specific
+       demodulator AGC-loop tuning register writes (empirically-tuned
+       analog gain-loop constants matched to that tuner family's
+       noise/gain profile presented to the demodulator front end) --
+       the R828D uses one specific constant set, distinct from the set
+       used for other tuner families.  For the R828D, this step also
+       reconfigures the demodulator's ADC/IF datapath away from its
+       power-on zero-IF default into the mode this tuner actually
+       operates in day to day -- see Section 10.11 for the full
+       register list.  This is not an optional or legacy step; it
+       MUST run on every device open.
+
+   8.  Determine the tuner's reference crystal frequency (Section 8,
+       Section 10.3) and run the tuner's own power-up initialization
+       sequence (Section 10.10) over I2C, with the repeater still
+       enabled.
+
+   9.  Disable the I2C repeater.
+
+   Device close reverses only the power state (Section 7.1,
+   Section 10.9) -- the tuner's own power-down sequence runs first,
+   over the I2C repeater, then the demodulator is powered off.  No
+   other initialization step is explicitly undone.
+
+
+7.  RTL2832U Demodulator Core
+
+7.1.  Baseband Initialization Sequence
+
+   Executed once, at device open.  Fixed sequence, in order, all via
+   the paged-register mechanism (Section 5.4) unless noted:
+
+   1.   USB-core system-control register <- 0x09 (1 byte).
+
+   2.   USB-core endpoint max-packet-size register <- 0x0002
+        (2 bytes).
+
+   3.   USB-core endpoint control register <- 0x1002 (2 bytes).
+
+   4.   System block: demodulator-control-1 register <- 0x22
+        (1 byte).
+
+   5.   System block: demodulator-control register <- 0xE8 (1 byte)
+        -- powers on the demodulator and ADCs.  The same register
+        takes value 0x20 on power-down (device close).
+
+   6.   Soft reset: page 1, address 0x01 <- 0x14, then immediately <-
+        0x10 (bit 3 of this register is the soft-reset strobe: set
+        then cleared).  This exact write pair MUST recur after any
+        sample-rate change (Section 7.5) and doubles as the
+        I2C-repeater enable/disable register described in
+        Section 5.3 -- bit 3 (value 0x08) layered on a base value of
+        0x10 is the repeater bit, so 0x18 = repeater-on-and-
+        reset-released, 0x10 = repeater-off-and-reset-released.
+
+   7.   Page 1, address 0x15 <- 0x00 (disables spectrum inversion /
+        adjacent-channel rejection, 1 byte); page 1, address 0x16 <-
+        0x0000 (2 bytes); then clear 6 consecutive one-byte registers
+        starting at page 1 address 0x16 (i.e. 0x16-0x1B) to 0x00 --
+        this range holds the DDC frequency-shift / IF-frequency
+        registers described in Section 7.3, zeroed at boot.
+
+   8.   Load default channel (decimation) FIR filter coefficients
+        (Section 7.2).
+
+   9.   Page 0, address 0x19 <- 0x05 (1 byte): enables raw-sample
+        ("SDR") passthrough mode and disables the chip's internal
+        digital-AGC bit (bit 5 of this register).  This same register
+        is reused for the test-mode and AGC-mode toggles of
+        Section 7.6.
+
+   10.  Page 1, address 0x93 <- 0xF0; page 1, address 0x94 <- 0x0F:
+        initializes an internal state-machine holding register pair
+        to a known state.
+
+   11.  Page 1, address 0x11 <- 0x00: attempts to disable an internal
+        AGC-enable bit (bit 0).  (Unverified) -- observed in the
+        reference behavior this specification is based on to have no
+        measurable effect; included for completeness, but
+        implementers SHOULD NOT depend on it doing anything.
+
+   12.  Page 0, address 0x61 <- 0x60: disables the DVB-T
+        packet-filter logic.  Irrelevant to raw IQ streaming; the
+        chip is fundamentally a DVB-T demodulator repurposed as an
+        SDR front end, and this bit belongs to the unused DVB-T
+        decode path.
+
+   13.  Page 0, address 0x06 <- 0x80: selects the default ADC I/Q
+        datapath routing.  This register is reused with different
+        values by direct sampling mode (Section 7.7); see the caveat
+        there.
+
+   14.  Page 1, address 0xB1 <- 0x1B: enables zero-IF mode, DC-offset
+        cancellation, and I/Q imbalance estimation/compensation
+        together (three independent enable bits packed into one
+        write).
+
+   15.  Page 0, address 0x0D <- 0x83: disables a 4.096 MHz auxiliary
+        test-clock output that would otherwise appear on a debug pin.
+
+7.2.  Channel (Decimation) FIR Filter
+
+   o  16 programmable filter taps configure a symmetric 32-tap
+      filter.  Only the first half is stored; the chip mirrors the
+      second half automatically -- a fixed hardware property, not an
+      implementation choice.
+
+   o  Runs at the reference-crystal rate.
+
+   o  Packing: the first 8 taps are signed 8-bit values, one byte
+      each (bytes 0-7 of a 20-byte payload).  The remaining 8 taps
+      are signed 12-bit values, packed two taps into 3 bytes: for a
+      pair of 12-bit values A and B, the three packed bytes are
+      (A >> 4), ((A << 4) | ((B >> 8) & 0xF)), (B & 0xFF).
+
+   o  Total 20 bytes, written one byte per register to 20 consecutive
+      addresses in page 1, starting at 0x1C (i.e. 0x1C-0x2F).
+
+   o  Coefficients are a configurable "receive channel shape"
+      parameter, not a fixed hardware constant -- an implementation
+      SHOULD expose them as a tunable filter rather than hard-coding
+      one set.  A built-in default set tuned generically for FM/DAB-
+      style bandwidths is an acceptable default.
+
+7.3.  IF Frequency / Spectrum Inversion
+
+   o  IF tuning register: a 22-bit two's-complement fixed-point
+      value,
+
+         register_value = -round(desired_IF_Hz * 2^22 /
+                                  corrected_crystal_Hz)
+
+      i.e. the IF offset expressed as a negated fraction of the
+      (PPM-corrected) crystal frequency, scaled by 2^22 (a standard
+      numerically-controlled-oscillator phase-increment register).
+
+   o  Split across three page-1 registers, most-significant first:
+      address 0x19 holds bits [21:16] (masked to 6 bits), address
+      0x1A holds bits [15:8], address 0x1B holds bits [7:0].
+
+   o  MUST be recomputed and rewritten any time the desired IF
+      changes (tuner retune, sideband change, offset-tuning toggle),
+      always against the currently PPM-corrected crystal value, never
+      a raw nominal one.
+
+   o  Spectrum inversion (sideband select) is a single bit at page 1,
+      address 0x15: 0x01 = inversion enabled, 0x00 = disabled.  The
+      last-written state SHOULD be cached to avoid redundant writes.
+
+7.4.  Crystal Frequency and PPM Correction
+
+   o  Default demodulator crystal frequency: 28,800,000 Hz.  The
+      register-level trim range accepted for this value is only
+      +/-1000 Hz around that default -- real frequency flexibility
+      comes from the PPM-correction path below, or from a board
+      fitting a genuinely different crystal (as the Blog V4 does, at
+      exactly 28.8 MHz, matching the default).
+
+   o  PPM correction is applied as a multiplicative scale factor to
+      both the demodulator crystal and the (separately tracked) tuner
+      crystal value:
+
+         corrected_Hz = nominal_Hz * (1 + ppm / 1e6)
+
+   o  A second, independent fine-trim register pair exists for the
+      resampler clock itself: a 16-bit signed value
+
+         trim = round(-ppm * 2^24 / 1,000,000)
+
+      written as page-1 address 0x3F (low byte) and address 0x3E
+      (bits [13:8], masked to 6 bits).  This MUST be rewritten
+      alongside every sample-rate change (Section 7.5).
+
+7.5.  Sample Rate (Resampler Ratio)
+
+   o  Valid input range: sample rate MUST be strictly greater than
+      225,000 Hz and at most 3,200,000 Hz; the sub-range
+      300,001-900,000 Hz is explicitly rejected as an unrepresentable
+      "dead zone" of the resampler -- effective valid ranges are
+      therefore (225,000, 300,000] and (900,000, 3,200,000].
+
+   o  Ratio formula:
+
+         ratio = floor(crystal_Hz * 2^22 / requested_rate_Hz)
+
+      then the low 2 bits are forced to zero and the result masked to
+      28 bits: ratio &= 0x0FFFFFFC.
+
+   o  To compute the achieved (rounded) rate for reporting back to a
+      caller, bit 27 (0x08000000) of the masked ratio is duplicated
+      into bit 28 first:
+
+         real_ratio = ratio | ((ratio & 0x08000000) << 1)
+
+      then
+
+         achieved_rate_Hz = crystal_Hz * 2^22 / real_ratio
+
+   o  Written as two page-1 registers: address 0x9F <- bits [27:16]
+      of the ratio (2 bytes), address 0xA1 <- bits [15:0] (2 bytes).
+
+   o  After writing the ratio: rewrite the PPM fine-trim pair
+      (Section 7.4), then reissue the soft reset (Section 7.1, step
+      6) -- every sample-rate change MUST re-trigger a full
+      demodulator soft reset.  If offset tuning (Section 7.8) is
+      currently active, its IF shift MUST be recomputed afterward,
+      since it scales with sample rate.
+
+7.6.  Test Mode / Internal AGC Mode
+
+   Both features multiplex the same register used for "SDR mode" at
+   boot (page 0, address 0x19):
+
+   +--------------------------------------------------------+-------+
+   | State                                                  | Value |
+   +--------------------------------------------------------+-------+
+   | Normal operation (SDR mode on, test mode off, internal | 0x05  |
+   | AGC off)                                               |       |
+   | Test mode on                                           | 0x03  |
+   | Internal digital AGC on                                | 0x25  |
+   +--------------------------------------------------------+-------+
+
+              Table 4: Register 0x19 (Page 0) Mode Values
+
+7.7.  Direct Sampling Mode
+
+   Bypasses the tuner's IF output entirely, feeding an external signal
+   directly into one ADC input.  Used for receiving frequencies below
+   the tuner's normal range by external means (an HF converter, or a
+   direct antenna feed on the ADC pin).
+
+   Two selectable modes: "I-ADC direct" and "Q-ADC direct",
+   corresponding to which of the two ADC inputs is used as the signal
+   path.
+
+   Enable sequence:
+
+   1.  If a tuner is currently attached, shut it down first (over the
+       I2C repeater).
+
+   2.  Page 1, address 0xB1 <- 0x1A: disables zero-IF mode (clears
+       the bit set at boot) while preserving the other bits from the
+       boot-time 0x1B pattern.
+
+   3.  Page 1, address 0x15 <- 0x00: disables spectrum inversion.
+
+   4.  Page 0, address 0x08 <- 0x4D: enables only the in-phase (I)
+       ADC input path.
+
+   5.  Page 0, address 0x06 <- 0x80 (I-ADC direct) or 0x90 (Q-ADC
+       direct): selects which physical ADC input is treated as I vs.
+       Q.  (Unverified, partial) -- only bit 4 and the low nibble are
+       confirmed to change meaning across the observed uses of this
+       register (0x80 = 1000_0000, 0x90 = 1001_0000, and a third
+       value 0xCD = 1100_1101 used on the disable path below); the
+       remaining set bits' individual purpose is not confirmed from
+       behavior alone and SHOULD be checked against a register
+       reference if bit-level compatibility matters.
+
+   6.  Re-apply the current tuned center frequency (keeps frequency
+       bookkeeping consistent even with no tuner attached).
+
+   Disable sequence (return to normal tuner-fed operation):
+
+   1.  Re-run the tuner's power-up initialization sequence over the
+       I2C repeater.
+
+   2.  If the tuner is R820T/R828D family: set IF frequency to a
+       fixed 3,570,000 Hz (Section 7.3 mechanism; matches the
+       tuner's own default IF placement, Section 10.5) and re-enable
+       spectrum inversion (page 1, address 0x15 <- 0x01).
+
+   3.  For any other tuner family: set IF frequency to 0 Hz, page 0
+       address 0x08 <- 0xCD (both I and Q ADC inputs enabled), and
+       re-enable zero-IF mode (page 1, address 0xB1 <- 0x1B).
+
+   4.  Page 0, address 0x06 <- 0x80 in both cases (restores default
+       ADC routing).
+
+   5.  Re-apply the current tuned center frequency.
+
+   Automatic threshold switching is a policy convenience, not a
+   distinct hardware mode: a configurable policy MAY select "always
+   tuner/IQ", "always I-ADC direct", "always Q-ADC direct", or an
+   automatic mode that switches to direct sampling below a frequency
+   threshold and back to tuner mode above it.  A default threshold of
+   28.8 MHz MAY be used; the reference behavior this specification is
+   based on treats its own default-threshold table as explicitly
+   uncertain for this exact tuner variant -- treat any specific number
+   here as a starting policy choice, not an authoritative hardware
+   constant (see Section 15, item 5).
+
+7.8.  Offset Tuning
+
+   NOT usable together with the R828D tuner path (rejected outright
+   when an R820T/R828D-family tuner is active) and not combinable with
+   direct sampling mode.
+
+   When enabled (non-R820T/R828D tuners only): the local oscillator is
+   deliberately shifted away from the wanted signal by
+
+      offset_Hz = (current_sample_rate_Hz / 2) * 1.7
+
+   i.e. 85% of the Nyquist half-rate -- moving the wanted signal off
+   the ADC's own DC-adjacent 1/f-noise region.  This shift is applied
+   through the same IF-frequency register path described in
+   Section 7.3.  Tuner filter bandwidth is widened to 2x the offset
+   frequency while active, and restored to the normal value when
+   disabled.
+
+7.9.  GPIO and Auxiliary I/O
+
+   Four one-byte registers in the system block provide 8
+   general-purpose I/O lines:
+
+   +--------------+-----------------------------------------------------+
+   | Register     | Role                                                |
+   | (Function)   |                                                     |
+   +--------------+-----------------------------------------------------+
+   | GPIO input   | Read current pin state                              |
+   | data         |                                                     |
+   | GPIO output  | Drive pin state (when configured as output)         |
+   | data         |                                                     |
+   | GPIO output  | Per-pin output-enable / direction                   |
+   | enable       |                                                     |
+   | GPIO         | A second per-pin direction-adjacent control,        |
+   | pull/disable | written alongside output- enable whenever a pin's   |
+   |              | direction changes.  (Unverified) -- exact           |
+   |              | polarity/semantics relative to output-enable is     |
+   |              | inferred, not confirmed; see Section 15, item 3.    |
+   +--------------+-----------------------------------------------------+
+
+                  Table 5: GPIO Register Set (System Block)
+
+   o  Single-bit read: read the input-data register, test bit
+      (1 << pin).
+
+   o  Single-bit write: read-modify-write the output-data register.
+
+   o  Configure a pin as output: clear its bit in the pull/disable
+      register, then set its bit in the output-enable register.
+
+   o  Configure a pin as input: set its bit in the pull/disable
+      register, then clear its bit in the output-enable register.
+
+   o  Whole-byte read/write variants exist for both data registers.
+
+   o  One GPIO line MUST be pulsed high-then-low as a hardware reset
+      strobe for one tuner family candidate during the detection
+      sequence (Section 8) when no other tuner has matched yet --
+      evidence that at least one tuner family needs a physical reset
+      pulse, not just I2C commands, to become responsive.  Not needed
+      for the R828D path specifically, since R828D is detected before
+      this fallback strobe would fire.
+
+   o  A configurable GPIO line drives an external bias-tee supply
+      on/off as a plain output toggle (no special protocol).  GPIO 0
+      is a reasonable default pin assignment, but implementers SHOULD
+      treat it as configurable per board rather than a fixed hardware
+      fact.
+
+
+8.  Tuner Detection Sequence
+
+   Run once at device open, immediately after baseband initialization,
+   with the I2C repeater (Section 5.3) held enabled for the whole
+   sequence.  Candidates are tried in this fixed order, stopping at
+   the first match:
+
+   +------+-----------------+----------+------------+-------------------+
+   | Step | I2C Address     | Check    | Expected   | Tuner Family on   |
+   |      | (7-bit)         | Register | Value      | Match             |
+   +------+-----------------+----------+------------+-------------------+
+   | 1    | 0x64            | 0x02     | 0x40       | Elonics E4000     |
+   | 2    | 0x63            | 0x00     | 0xA3       | Fitipower FC0013  |
+   | 3    | 0x1A            | 0x00     | 0x69       | Rafael Micro      |
+   |      |                 |          |            | R820T             |
+   | 4    | 0x3A            | 0x00     | 0x69       | Rafael Micro      |
+   |      |                 |          |            | R828D             |
+   | -    | (if none        |          |            |                   |
+   |      | matched: pulse  |          |            |                   |
+   |      | a GPIO line     |          |            |                   |
+   |      | high-then-low   |          |            |                   |
+   |      | as a hardware   |          |            |                   |
+   |      | reset for the   |          |            |                   |
+   |      | remaining       |          |            |                   |
+   |      | candidates)     |          |            |                   |
+   | 5    | 0x56            | 0x01     | 0x56 (low  | FCI FC2580        |
+   |      |                 |          | 7 bits of  |                   |
+   |      |                 |          | the byte   |                   |
+   |      |                 |          | read, top  |                   |
+   |      |                 |          | bit        |                   |
+   |      |                 |          | ignored)   |                   |
+   | 6    | 0x63            | 0x00     | 0xA1       | Fitipower FC0012  |
+   |      |                 |          |            | (shares its I2C   |
+   |      |                 |          |            | address with      |
+   |      |                 |          |            | FC0013, tried     |
+   |      |                 |          |            | only after it)    |
+   | -    | (none matched)  |          |            | Fall back to      |
+   |      |                 |          |            | forced            |
+   |      |                 |          |            | direct-sampling   |
+   |      |                 |          |            | mode (Section     |
+   |      |                 |          |            | 7.7) -- no        |
+   |      |                 |          |            | recognized RF     |
+   |      |                 |          |            | front end         |
+   +------+-----------------+----------+------------+-------------------+
+
+                Table 6: Tuner Detection Priority Order
+
+   For this specification's target device, step 4 matches: R820T and
+   R828D share an identical chip-ID check (register 0x00 = 0x69) and
+   are told apart purely by which of the two I2C addresses answers --
+   a probe MUST try both addresses even though the check itself is
+   identical.
+
+   On an R828D match, before finishing detection: compare the USB
+   manufacturer and product strings already read at open time against
+   "RTLSDRBlog" / "Blog V4" (Section 4).  If both match:
+
+   o  Flag the device internally as an RTL-SDR Blog V4 unit.
+
+   o  Use 28.8 MHz as the tuner's reference crystal frequency (not the
+      R828D's usual 16 MHz default) -- see Section 10.3, Section 11.1.
+
+   o  Enable the additional Blog-V4-specific behaviors of Section 11.
+
+   If the strings do NOT match (a plain/third-party R828D board), use
+   16.0 MHz as the tuner's reference crystal frequency instead, and
+   skip all of Section 11.
+
+
+9.  I2C-Layer Tuner Control API
+
+   The following operations sit above the raw register map
+   (Section 10) and are what a host application actually calls; each
+   MUST bracket its I2C work with repeater-enable/disable
+   (Section 5.3).
+
+   +-----------------+--------------------------------------------------+
+   | Operation       | Behavior                                         |
+   +-----------------+--------------------------------------------------+
+   | PLL lock query  | Reads back the tuner's PLL-lock status bit       |
+   |                 | (register 0x02 bit 6, Section 10.2).             |
+   | Set PLL         | Toggles the dithering bit consulted              |
+   | dithering       |                                                  |
+   | enable          | by the PLL math of Section 10.3 (register 0x12   |
+   |                 | bit 4).  Gated to the plain R820T variant only   |
+   |                 | -- the reference behavior this specification is  |
+   |                 | based on rejects this call outright for an R828D |
+   |                 | tuner (including this specification's target     |
+   |                 | device), even though the underlying register and |
+   |                 | mechanism are identical between the two          |
+   |                 | variants.  Whether to keep this restriction (for |
+   |                 | behavioral compatibility) or lift it (since it   |
+   |                 | appears to be an arbitrary API-surface           |
+   |                 | limitation rather than a hardware one) is a      |
+   |                 | design choice for the implementer.               |
+   | Set             | Manually forces the harmonic index               |
+   | harmonic-mixing |                                                  |
+   | order override  | used by the PLL math of Section 10.3 (0-16; 0/1  |
+   |                 | = fundamental) instead of letting it auto-select |
+   |                 | by frequency.  Gated to the plain R820T variant  |
+   |                 | only, same restriction and caveat as dithering   |
+   |                 | above.                                           |
+   | Gain-step list  | Returns a fixed, hard-coded table of legal gain  |
+   |                 | values, in tenths of a dB, without any tuner I2C |
+   |                 | traffic.  For R820T/R828D: 29 values -- 0, 9,    |
+   |                 | 14, 27, 37, 77, 87, 125, 144, 157, 166, 197,     |
+   |                 | 207, 229, 254, 280, 297, 328, 338, 364, 372,     |
+   |                 | 386, 402, 421, 434, 439, 445, 480, 496 (tenths   |
+   |                 | of dB).  This is a reported capability list for  |
+   |                 | API callers, not the raw register gain-code      |
+   |                 | table of Section 10.6 -- the two are related but |
+   |                 | not identical structures.                        |
+   | Set/get         | Applies a channel-filter bandwidth request in Hz |
+   | bandwidth       | (Section 10.5); passing 0 Hz falls back to the   |
+   |                 | current sample rate.                             |
+   | Set IF-passband | Shifts the tuner's IF filter center              |
+   | center          |                                                  |
+   | offset          | relative to nominal, in Hz.                      |
+   | Set gain        | Applies one overall RF gain value from the       |
+   | (composite)     | gain-step list, or a sentinel meaning "hardware  |
+   |                 | AGC."                                            |
+   | Set gain,       | R828D-specific: sets LNA, mixer,                 |
+   | extended        |                                                  |
+   | (3-way)         | and VGA gain stages independently by 0-15 index  |
+   |                 | each (Section 10.6), bypassing the composite     |
+   |                 | search.                                          |
+   | Set IF mode     | R828D-specific: selects an IF gain/bandwidth     |
+   |                 | operating point by a numeric code (see the       |
+   |                 | encoding table of Section 10.6).                 |
+   | Get gain        | Reads back the currently applied composite gain. |
+   | (composite)     |                                                  |
+   | Set IF gain     | Sets one named IF gain stage directly.           |
+   | (staged)        |                                                  |
+   | Set gain mode   | Toggles hardware-AGC vs. manual gain control for |
+   |                 | the whole chain.                                 |
+   | Set sideband    | Selects upper/lower sideband for the tuner's IF  |
+   |                 | conversion, then recomputes and reapplies the IF |
+   |                 | center frequency and the currently tuned RF      |
+   |                 | frequency so the whole chain stays consistent    |
+   |                 | (IF center = tuner IF frequency -+ IF-band-      |
+   |                 | center offset, sign depending on sideband        |
+   |                 | choice).                                         |
+   | Raw register    | Escape hatch: read or write one                  |
+   | access          |                                                  |
+   | (masked)        | arbitrary tuner register directly, with a bit    |
+   |                 | mask limiting which bits a write touches.        |
+   | Register        | Same shape as raw register access,               |
+   | "override"      |                                                  |
+   | (masked)        | but pins the masked bits of a register: the pin  |
+   |                 | is enforced centrally, inside the shared         |
+   |                 | I2C-write path used by every other tuner         |
+   |                 | operation, so every future write to that         |
+   |                 | register -- from gain control, PLL programming,  |
+   |                 | filter bandwidth, anything -- has the masked     |
+   |                 | bits forcibly clamped to the pinned value before |
+   |                 | it goes out over I2C, until the override is      |
+   |                 | explicitly cleared.  This is a real, persistent  |
+   |                 | behavioral difference from the plain             |
+   |                 | raw-register write above (which only touches the |
+   |                 | register once, and can be overwritten again by   |
+   |                 | any later internal logic).                       |
+   +-----------------+--------------------------------------------------+
+
+                Table 7: Device-Level Tuner Control Operations
+
+   Demodulator-side AGC coupling (build-time optional, inert by
+   default): every gain/IF-mode operation above additionally reports
+   back whether the tuner driver considers itself in "hardware AGC" or
+   "manual" mode for its IF/VGA stage, and -- only in a non-default
+   build configuration -- this toggles a single demodulator register
+   (page 1, address 0x04: 0x80 for AGC, 0x00 for manual) to mirror
+   that state into the demodulator's own RF/IF AGC-loop-enable bit.
+   In the default build configuration this register write does not
+   happen at all (the coupling logic runs, but its actual register
+   write is compiled out) -- implementers SHOULD treat register 0x04
+   (page 1) as unused for this tuner path unless deliberately
+   implementing the non-default coupling behavior as well.
+
+
+10.  R820T/R828D Tuner: Register Map and Behavior
+
+   R820T and R828D are the same tuner core at two I2C bus addresses
+   (Section 10.1) with the R828D die adding a second RF input and a
+   changed VCO fine-tune target (Section 10.8).  Except where a
+   difference is called out explicitly, every register, field, and
+   procedure below applies identically to both.  This specification's
+   target device (the Blog V4) uses the R828D variant; R820T-only
+   deltas are noted inline for completeness.
+
+   The tuner exposes 32 register addresses (0x00-0x1F); 0x00-0x04 are
+   read-only status, 0x05-0x1F are read/write and shadow-cached
+   (writes update a local copy so unrelated field updates do not need
+   a full read-modify-write over I2C for every change).  A multi-byte
+   write starting at register N writes registers N, N+1, N+2, ...
+   sequentially in one I2C transaction (the register address
+   auto-increments on the wire).
+
+   Bit order: (Unverified, but confirmed present in the reference
+   behavior this specification is based on) every byte read back from
+   this chip over I2C is bit-reversed relative to natural MSB-first
+   order and MUST be un-reversed before use; no reversal is applied on
+   the write path (values are pre-computed already in the wire's
+   expected order).  Implementers SHOULD confirm this against a
+   logic-analyzer capture before treating it as certain -- it is
+   unusual for a general-purpose I2C part and could be an artifact
+   specific to one particular I2C bridge implementation rather than a
+   genuine chip requirement (see Section 15, item 6).
+
+10.1.  Identification
+
+   +----------+----------+----------------------------------------------+
+   | I2C      | Register | Expected Value                               |
+   | Address  |          |                                              |
+   | (7-bit)  |          |                                              |
+   +----------+----------+----------------------------------------------+
+   | 0x3A     | 0x00     | 0x69 (fixed chip-ID byte, identical to the   |
+   |          |          | R820T variant -- only the bus address        |
+   |          |          | distinguishes them)                          |
+   +----------+----------+----------------------------------------------+
+
+                    Table 8: R828D Chip Identification
+
+10.2.  Register Map
+
+   Register addresses are given in hex.  For each register, an
+   8-bit field diagram is given (bit position 7 = most significant
+   bit, leftmost; bit position 0 = least significant bit, rightmost --
+   consistent with the "Bits" column convention used throughout this
+   document), followed by the field value table.
+
+   Register 0x00 -- Chip ID (Read-Only)
+
+     7   6   5   4   3   2   1   0
+   +-------------------------------+
+   |            Chip ID            |
+   +-------------------------------+
+
+      +------+---------+------------+
+      | Bits | Field   | Meaning    |
+      +------+---------+------------+
+      | 7:0  | Chip ID | Fixed 0x69 |
+      +------+---------+------------+
+
+   Register 0x01 -- Detector 3 Reading (Read-Only)
+
+     7   6   5   4   3   2   1   0
+   +-------+-----------------------+
+   |  --   |     ADC3 reading      |
+   +-------+-----------------------+
+
+      +------+--------------+------------------------------------------+
+      | Bits | Field        | Meaning                                  |
+      +------+--------------+------------------------------------------+
+      | 7:6  | --           | Fixed '10'                               |
+      | 5:0  | ADC3 reading | Internal power-detector 3 analog reading |
+      +------+--------------+------------------------------------------+
+
+   Register 0x02 -- PLL Status (Read-Only)
+
+     7   6   5   4   3   2   1   0
+   +---+---+-----------------------+
+   |   | P |         VOPR          |
+   +---+---+-----------------------+
+
+      +------+-----------------------------+----------------------------+
+      | Bits | Field                       | Meaning                    |
+      +------+-----------------------------+----------------------------+
+      | 7    | --                          | Fixed '1'                  |
+      | 6    | PLL lock flag (LCK)         | 0 = unlocked, 1 = locked   |
+      | 5:0  | VCO operating-point reading | 0 ~ 1.75 GHz, 63 ~ 3.6 GHz |
+      +------+-----------------------------+----------------------------+
+
+   Register 0x03 -- Gain Readback (Read-Only)
+
+     7   6   5   4   3   2   1   0
+   +---------------+---------------+
+   |     MGCR      |     LGCR      |
+   +---------------+---------------+
+
+      +------+--------------------------+--------------------------+
+      | Bits | Field                    | Meaning                  |
+      +------+--------------------------+--------------------------+
+      | 7:4  | Mixer gain code readback | 0 = lowest, 15 = highest |
+      | 3:0  | LNA gain code readback   | 0 = lowest, 15 = highest |
+      +------+--------------------------+--------------------------+
+
+   Register 0x04 -- Calibration Status (Read-Only)
+
+     7   6   5   4   3   2   1   0
+   +-------+-------+---------------+
+   |  --   | VFTI  |     FSCRC     |
+   +-------+-------+---------------+
+
+      +------+------------------------+------------------------------------+
+      | Bits | Field                  | Meaning                            |
+      +------+------------------------+------------------------------------+
+      | 5:4  | VCO fine-tune          | Drives the PLL divider fine-       |
+      |      | indicator              | adjust step, Section 10.3          |
+      | 3:0  | Filter                 | See Section 10.5                   |
+      |      | self-calibration       |                                    |
+      |      | result code            |                                    |
+      +------+------------------------+------------------------------------+
+
+   Register 0x05
+
+     7   6   5   4   3   2   1   0
+   +---+-------+---+---------------+
+   | L |  RF   | L |     LMGC      |
+   +---+-------+---+---------------+
+
+      +------+----------------+--------------------------------------------+
+      | Bits | Field          | Meaning                                    |
+      +------+----------------+--------------------------------------------+
+      | 7    | Loop-through   | 0 = on, 1 = off                            |
+      |      | (L)            |                                            |
+      | 6:5  | RF input       | R828D only; "air" vs. "cable 1" -- 00 =    |
+      |      | select (INSEL) | neither/cable-1 depending on board logic   |
+      |      | ("air" vs.     | (Section 10.7, Section 11.4); always 0 on  |
+      |      | "cable 1")     | plain R820T                                |
+      | 4    | LNA gain mode  | 0 = automatic, 1 = manual                  |
+      |      | (GMD)          |                                            |
+      | 3:0  | LNA manual     | 0 = min, 15 = max (Section 10.6)           |
+      |      | gain code      |                                            |
+      +------+----------------+--------------------------------------------+
+
+   Register 0x06
+
+     7   6   5   4   3   2   1   0
+   +---+---+---+---+---+-----------+
+   | P | P | F |   | R |   LBPT    |
+   +---+---+---+---+---+-----------+
+
+      +------+-----------------------------+-------------------------------+
+      | Bits | Field                       | Meaning                       |
+      +------+-----------------------------+-------------------------------+
+      | 7    | Power detector 1 enable     | 0 = on, 1 = off               |
+      |      | (PD1)                       |                               |
+      | 6    | Power detector 3 enable     | 0 = off, 1 = on               |
+      |      | (PD3)                       |                               |
+      | 5    | Filter gain boost (FGB)     | 0 = +0 dB, 1 = +3 dB          |
+      | 4    | --                          | Fixed '1'                     |
+      | 3    | RF input select ("cable 2") | R828D only; always 0 on plain |
+      |      | (C2)                        | R820T                         |
+      | 2:0  | LNA bias/power trim         | 0 = max power, 7 = min power  |
+      +------+-----------------------------+-------------------------------+
+
+   Register 0x07
+
+     7   6   5   4   3   2   1   0
+   +---+---+---+---+---------------+
+   | M | M | M | M |     MMGC      |
+   +---+---+---+---+---------------+
+
+      +------+---------------------------+--------------------------------+
+      | Bits | Field                     | Meaning                        |
+      +------+---------------------------+--------------------------------+
+      | 7    | Mixer output sideband     | 0 = lower, 1 = upper           |
+      |      | (SB)                      |                                |
+      | 6    | Mixer power (PWR)         | 0 = off, 1 = on                |
+      | 5    | Mixer bias current (BIA)  | 0 = max, 1 = normal            |
+      | 4    | Mixer gain mode (GMD)     | 0 = manual, 1 = automatic      |
+      | 3:0  | Mixer manual gain code    | 0 = min, 15 = max (Section     |
+      |      |                           | 10.6)                          |
+      +------+---------------------------+--------------------------------+
+
+   Register 0x08
+
+     7   6   5   4   3   2   1   0
+   +---+---+---+-------------------+
+   | M | M | I |       IRGT        |
+   +---+---+---+-------------------+
+
+      +------+------------------------------+-----------------------------+
+      | Bits | Field                        | Meaning                     |
+      +------+------------------------------+-----------------------------+
+      | 7    | Mixer output buffer power    | 0 = off, 1 = on             |
+      |      | (PWR)                        |                             |
+      | 6    | Mixer buffer bias (BUF)      | 0 = high current, 1 = low   |
+      |      |                              | current                     |
+      | 5    | Image-gain-trim path select  | 0 = Q, 1 = I                |
+      |      | (IQSL)                       |                             |
+      | 4:0  | Image-rejection gain trim    | 0 = min, 31 = max           |
+      +------+------------------------------+-----------------------------+
+
+   Register 0x09
+
+     7   6   5   4   3   2   1   0
+   +---+---+---+-------------------+
+   | I | I | I |       IRPT        |
+   +---+---+---+-------------------+
+
+      +------+-------------------------------+-----------------------------+
+      | Bits | Field                         | Meaning                     |
+      +------+-------------------------------+-----------------------------+
+      | 7    | IF filter power (PWR)         | 0 = on, 1 = off             |
+      | 6    | IF filter bias (BIA)          | 0 = high current, 1 = low   |
+      |      |                               | current                     |
+      | 5    | Image-phase-trim path select  | 0 = Q, 1 = I                |
+      |      | (IQSL)                        |                             |
+      | 4:0  | Image-rejection phase trim    | 0 = min, 31 = max           |
+      +------+-------------------------------+-----------------------------+
+
+   Register 0x0A
+
+     7   6   5   4   3   2   1   0
+   +---+-------+---+---------------+
+   | C | FBCB  | F |     FFTC      |
+   +---+-------+---+---------------+
+
+      +------+---------------+---------------------------------------------+
+      | Bits | Field         | Meaning                                     |
+      +------+---------------+---------------------------------------------+
+      | 7    | Channel       | 0 = off, 1 = on                             |
+      |      | filter power  |                                             |
+      |      | (PWR)         |                                             |
+      | 6:5  | Filter bias   | 00 = highest power ... 11 = lowest power    |
+      |      | current       |                                             |
+      |      | (BIAS)        |                                             |
+      | 4    | Filter Q      | Fixed '1'                                   |
+      |      | select (Q)    |                                             |
+      | 3:0  | Filter        | 0 = widest ... 15 = narrowest; holds the    |
+      |      | fine-tune     | self-calibration result after Section 10.5  |
+      |      | code          | runs                                        |
+      +------+---------------+---------------------------------------------+
+
+   Register 0x0B
+
+     7   6   5   4   3   2   1   0
+   +-----------+---+---------------+
+   |    FBC    | F |     HPCC      |
+   +-----------+---+---------------+
+
+      +------+--------------------------+----------------------------------+
+      | Bits | Field                    | Meaning                          |
+      +------+--------------------------+----------------------------------+
+      | 7:5  | Filter bandwidth, coarse | 000 = widest ... 111 = narrowest |
+      | 4    | Filter self-calibration  | Pulse 1 then 0 to run one        |
+      |      | trigger (T)              | calibration cycle                |
+      | 3:0  | High-pass corner control | 0000 = highest corner ... 1111 = |
+      |      |                          | lowest corner                    |
+      +------+--------------------------+----------------------------------+
+
+   Register 0x0C -- IF/VGA Gain
+
+     7   6   5   4   3   2   1   0
+   +---+---+---+---+---------------+
+   | D | V |   | V |     VMGC      |
+   +---+---+---+---+---------------+
+
+      +------+------------------+------------------------------------------+
+      | Bits | Field            | Meaning                                  |
+      +------+------------------+------------------------------------------+
+      | 7    | Detector-3 ADC   | 0 = on, 1 = off                          |
+      |      | path select (D3) |                                          |
+      | 6    | VGA power (PWR)  | 0 = off, 1 = on                          |
+      | 5    | --               | Fixed '1'                                |
+      | 4    | VGA gain source  | 1 = external analog AGC pin, 0 = 4-bit   |
+      |      | (SRC)            | code below                               |
+      | 3:0  | VGA manual gain  | 0000 = -12.0 dB ... 1111 = +40.5 dB, 3.5 |
+      |      | code             | dB/step (calibrated absolute figures)    |
+      +------+------------------+------------------------------------------+
+
+   Register 0x0D -- LNA AGC Thresholds
+
+     7   6   5   4   3   2   1   0
+   +---------------+---------------+
+   |      DHT      |      DLT      |
+   +---------------+---------------+
+
+      +------+---------------------+---------------------------------------+
+      | Bits | Field               | Meaning                               |
+      +------+---------------------+---------------------------------------+
+      | 7:4  | Detector high       | 0000 = 0.34 V ... 1111 = 1.94 V, ~0.1 |
+      |      | threshold           | V/step                                |
+      | 3:0  | Detector low        | Same scale                            |
+      |      | threshold           |                                       |
+      +------+---------------------+---------------------------------------+
+
+   Register 0x0E -- Mixer AGC Thresholds
+
+     7   6   5   4   3   2   1   0
+   +---------------+---------------+
+   |      DHT      |      DLT      |
+   +---------------+---------------+
+
+      +------+-------------------------+------------------------+
+      | Bits | Field                   | Meaning                |
+      +------+-------------------------+------------------------+
+      | 7:4  | Detector high threshold | Same 0.34-1.94 V scale |
+      | 3:0  | Detector low threshold  | Same scale             |
+      +------+-------------------------+------------------------+
+
+   Register 0x0F
+
+     7   6   5   4   3   2   1   0
+   +---+-------+---+---+---+---+---+
+   | W |  --   | C | R | F | I | A |
+   +---+-------+---+---+---+---+---+
+
+      +------+------------------------------+------------------------------+
+      | Bits | Field                        | Meaning                      |
+      +------+------------------------------+------------------------------+
+      | 7    | Widest-filter extension      | 0 = off, 1 = on              |
+      |      | enable (WFE)                 |                              |
+      | 4    | Clock-out pin enable (CLK)   | 0 = enabled, 1 = disabled    |
+      | 3    | Ring oscillator clock (ROC)  | 1 = off, 0 = on              |
+      | 2    | Filter self-calibration      | 0 = off, 1 = on              |
+      |      | clock enable (CAL)           |                              |
+      | 1    | Internal AGC clock enable    | 0 = on, 1 = off              |
+      |      | (AGC)                        |                              |
+      | 0    | Auxiliary pin (AUX)          | Not used by this             |
+      |      |                              | specification's behavior     |
+      +------+------------------------------+------------------------------+
+
+   Register 0x10 -- PLL Prescaler / Crystal
+
+     7   6   5   4   3   2   1   0
+   +-----------+---+---+---+-------+
+   |   LTMDS   | R | C |   | CLCS  |
+   +-----------+---+---+---+-------+
+
+      +------+-----------------+-------------------------------------------+
+      | Bits | Field           | Meaning                                   |
+      +------+-----------------+-------------------------------------------+
+      | 7:5  | LO-to-mixer     | 000 = /2, 001 = /4, 010 = /8, 011 = /16,  |
+      |      | divider select  | 100 = /32, 101 = /64                      |
+      | 4    | Reference       | 0 = reference = crystal, 1 = reference =  |
+      |      | divide-by-2     | crystal/2 (for crystals > 24 MHz)         |
+      |      | (RF2)           |                                           |
+      | 3    | Crystal drive   | 0 = high, 1 = low                         |
+      |      | strength (DRV)  |                                           |
+      | 2    | --              | Fixed '1'                                 |
+      | 1:0  | Crystal         | 00 = none, 01 = 10 pF, 10 = 20 pF, 11 =   |
+      |      | load-cap select | 30 pF                                     |
+      +------+-----------------+-------------------------------------------+
+
+   Register 0x11 -- Analog Regulator / Charge Pump
+
+     7   6   5   4   3   2   1   0
+   +-------+-----------+-----------+
+   | PALO  |    CPC    |    --     |
+   +-------+-----------+-----------+
+
+      +------+--------------------+----------------------------------------+
+      | Bits | Field              | Meaning                                |
+      +------+--------------------+----------------------------------------+
+      | 7:6  | PLL analog LDO     | 00 = off, 01 = 2.1 V, 10 = 2.0 V, 11 = |
+      |      | output             | 1.9 V                                  |
+      | 5:3  | Charge-pump        | 101 = 0.2x, 111 = auto                 |
+      |      | current            |                                        |
+      | 2:0  | --                 | Fixed '011'                            |
+      +------+--------------------+----------------------------------------+
+
+   Register 0x12 -- VCO Current / Dithering / Fractional-N
+
+     7   6   5   4   3   2   1   0
+   +-----------+---+---+-----------+
+   |    VBC    | D | F |    --     |
+   +-----------+---+---+-----------+
+
+      +------+---------------+---------------------------------------------+
+      | Bits | Field         | Meaning                                     |
+      +------+---------------+---------------------------------------------+
+      | 7:5  | VCO bias      | Trim value; raised as a retry step if lock  |
+      |      | current       | fails at the low default (Section 10.3)     |
+      | 4    | Dithering     | 0 = enabled, 1 = disabled                   |
+      |      | (DTH)         |                                             |
+      | 3    | Fractional-N  | 0 = enabled, 1 = disabled (integer-N only)  |
+      |      | enable (FRN)  |                                             |
+      | 2:0  | --            | Fixed '000'                                 |
+      +------+---------------+---------------------------------------------+
+
+   Register 0x13 -- VCO Manual DAC
+
+     7   6   5   4   3   2   1   0
+   +---+---+-----------------------+
+   |   | V |  VCO manual DAC code  |
+   +---+---+-----------------------+
+
+      +------+---------+---------------------------------------------------+
+      | Bits | Field   | Meaning                                           |
+      +------+---------+---------------------------------------------------+
+      | 7    | --      | Fixed '0'                                         |
+      | 6    | VCO     | 0 = automatic (PLL), 1 = manual (DAC code below)  |
+      |      | control |                                                   |
+      |      | mode    |                                                   |
+      |      | (MODE)  |                                                   |
+      | 5:0  | VCO     | 0 ~ 1.75 GHz, 63 ~ 3.6 GHz.  Left in automatic    |
+      |      | manual  | mode in normal operation; a fixed diagnostic tag  |
+      |      | DAC     | value is stamped here at init but is inert        |
+      |      | code    | because bit 6 stays 0.                            |
+      +------+---------+---------------------------------------------------+
+
+   Register 0x14 -- Integer PLL Divider
+
+     7   6   5   4   3   2   1   0
+   +-------+-----------------------+
+   | D2BC  |         D6BC          |
+   +-------+-----------------------+
+
+      +------+------------------+------------------------------------------+
+      | Bits | Field            | Meaning                                  |
+      +------+------------------+------------------------------------------+
+      | 7:6  | Divider, 2-bit   | total_integer_divider = 4*(6-bit field)  |
+      |      | component        | + (2-bit field) + 13                     |
+      | 5:0  | Divider, 6-bit   | See formula above                        |
+      |      | component        |                                          |
+      +------+------------------+------------------------------------------+
+
+   Registers 0x15 / 0x16 -- Fractional PLL Divider
+
+       Register 0x15:  7                                         0
+                       +-----------------------------------------+
+                       |     Fractional divider, low byte        |
+                       +-----------------------------------------+
+
+       Register 0x16:  7                                         0
+                       +-----------------------------------------+
+                       |     Fractional divider, high byte       |
+                       +-----------------------------------------+
+
+      +----------+------+-------------------------------+
+      | Register | Bits | Meaning                       |
+      +----------+------+-------------------------------+
+      | 0x15     | 7:0  | Fractional divider, low byte  |
+      | 0x16     | 7:0  | Fractional divider, high byte |
+      +----------+------+-------------------------------+
+
+      16-bit value F (0-65535), representing fraction F/65536 added
+      to the integer divider (Section 10.3).
+
+   Register 0x17 -- Digital Regulator / Notch
+
+     7   6   5   4   3   2   1   0
+   +-------+-------+---+-----------+
+   | PDLC  |  DBC  | O |    --     |
+   +-------+-------+---+-----------+
+
+      +------+----------------------------------+--------------------------+
+      | Bits | Field                            | Meaning                  |
+      +------+----------------------------------+--------------------------+
+      | 7:6  | PLL digital LDO current          | 00 = 1.8 V/8 mA, 01 =    |
+      |      |                                  | 1.8 V/4 mA, 10 = 2.0 V/8 |
+      |      |                                  | mA, 11 = off             |
+      | 5:4  | Divider buffer current           | 10 = 200 uA, 11 = 150 uA |
+      | 3    | Open-drain output / notch-filter | 0 = high-Z, 1 = low-Z    |
+      |      | enable (board-dependent use,     |                          |
+      |      | Section 11.3) (ND)               |                          |
+      | 2:0  | --                               | Fixed '100'              |
+      +------+----------------------------------+--------------------------+
+
+   Register 0x18 -- Ring Oscillator
+
+     7   6   5   4   3   2   1   0
+   +-------+---+---+---------------+
+   |  --   | R | R | Ring VCO trim |
+   +-------+---+---+---------------+
+
+      +------+------------------+------------------------------------------+
+      | Bits | Field            | Meaning                                  |
+      +------+------------------+------------------------------------------+
+      | 7:6  | --               | Fixed '01'                               |
+      | 5    | Ring divider,    | Combines with 0x19 bits [1:0]            |
+      |      | low bit (RDL)    |                                          |
+      | 4    | Ring oscillator  | 0 = off, 1 = on                          |
+      |      | power (PWR)      |                                          |
+      | 3:0  | Ring VCO trim    | ring_osc_freq = (16 + trim) * 8 *        |
+      |      |                  | reference_freq, trim range 9-14          |
+      +------+------------------+------------------------------------------+
+
+   Register 0x19 -- RF Filter / Calibration Divider
+
+     7   6   5   4   3   2   1   0
+   +---+-------+---+-------+-------+
+   | R |  RF   | A |  --   | RDH2B |
+   +---+-------+---+-------+-------+
+
+      +------+-------------+-----------------------------------------------+
+      | Bits | Field       | Meaning                                       |
+      +------+-------------+-----------------------------------------------+
+      | 7    | RF input    | 0 = off, 1 = on                               |
+      |      | filter      |                                               |
+      |      | power (PWR) |                                               |
+      | 6:5  | RF          | 00 = minimum                                  |
+      |      | poly-filter |                                               |
+      |      | bias        |                                               |
+      |      | current     |                                               |
+      |      | (BIAS)      |                                               |
+      | 4    | AGC pin     | 0 = primary, 1 = secondary                    |
+      |      | select      |                                               |
+      |      | (AGC)       |                                               |
+      | 3:2  | --          | Fixed '11'                                    |
+      | 1:0  | Ring        | With 0x18 bit 5, selects calibration- clock   |
+      |      | divider,    | divisor: one of 4, 6, 8, 12, 16, 24, 32, 48   |
+      |      | high 2 bits | (calibration_clock = ring_osc_freq / divisor) |
+      +------+-------------+-----------------------------------------------+
+
+   Register 0x1A -- Tracking Filter / AGC Clock / RF Band
+
+     7   6   5   4   3   2   1   0
+   +-------+-------+-------+-------+
+   | TFMT  | ACRA  |  PLL  | RFBSB |
+   +-------+-------+-------+-------+
+
+      +------+----------------------------+--------------------------------+
+      | Bits | Field                      | Meaning                        |
+      +------+----------------------------+--------------------------------+
+      | 7:6  | Tracking-filter mode (TFM) | 00 = engaged, 01 = bypass      |
+      | 5:4  | AGC clock rate (AGCCLK)    | 00/01 = 300 ms, 10 = 80 ms, 11 |
+      |      |                            | = 20 ms                        |
+      | 3:2  | PLL auto-tune clock rate   | 00 = 128 kHz, 01 = 32 kHz, 10  |
+      |      | (PLLCLK)                   | = 8 kHz                        |
+      | 1:0  | RF filter band select      | 00 = highest, 01 = mid, 10 =   |
+      |      | (BAND)                     | low                            |
+      +------+----------------------------+--------------------------------+
+
+   Register 0x1B -- RF Tracking-Filter Corner
+
+     7   6   5   4   3   2   1   0
+   +---------------+---------------+
+   |     LPNC      |     LPFC      |
+   +---------------+---------------+
+
+      +------+------------------------+----------------------------------+
+      | Bits | Field                  | Meaning                          |
+      +------+------------------------+----------------------------------+
+      | 7:4  | Low-pass-notch corner  | 0000 = highest ... 1111 = lowest |
+      | 3:0  | Low-pass-filter corner | 0000 = highest ... 1111 = lowest |
+      +------+------------------------+----------------------------------+
+
+      Set as a single lookup value per RF band, Section 10.4.
+
+   Register 0x1C -- Mixer Power-Detector Trim
+
+     7   6   5   4   3   2   1   0
+   +---------------+---+---+---+---+
+   |      TOP      | D |   | R |   |
+   +---------------+---+---+---+---+
+
+      +------+----------------------------+-------------------------------+
+      | Bits | Field                      | Meaning                       |
+      +------+----------------------------+-------------------------------+
+      | 7:4  | Take-off point             | 0 = highest, 15 = lowest      |
+      | 3    | Discharge mode (D)         | 0 = on                        |
+      | 2    | --                         | Fixed '1'                     |
+      | 1    | Ring-PLL source select     | 1 = clock sourced from ring   |
+      |      | (RPL)                      | PLL                           |
+      | 0    | --                         | Fixed '0'                     |
+      +------+----------------------------+-------------------------------+
+
+   Register 0x1D -- LNA Power-Detector Trim
+
+     7   6   5   4   3   2   1   0
+   +-------+-----------+-----------+
+   |  --   |   LTOP    |   STOP    |
+   +-------+-----------+-----------+
+
+      +------+--------------------------+-------------------------+
+      | Bits | Field                    | Meaning                 |
+      +------+--------------------------+-------------------------+
+      | 7:6  | --                       | Fixed '11'              |
+      | 5:3  | LNA take-off point       | 0 = highest, 7 = lowest |
+      | 2:0  | Secondary take-off point | 0 = highest, 7 = lowest |
+      +------+--------------------------+-------------------------+
+
+   Register 0x1E -- Weak-Signal Filter Extension
+
+     7   6   5   4   3   2   1   0
+   +---+---+-----------------------+
+   | D | E | Discharge timing trim |
+   +---+---+-----------------------+
+
+      +------+-----------------+-------------------------------------------+
+      | Bits | Field           | Meaning                                   |
+      +------+-----------------+-------------------------------------------+
+      | 7    | Detector source | 1 = use detector 3                        |
+      |      | select (SRC)    |                                           |
+      | 6    | Extension       | 0 = off, 1 = on (auto-widens channel      |
+      |      | enable (EXT)    | filter under weak- signal conditions)     |
+      | 5:0  | Discharge       | 0 = min, 63 = max                         |
+      |      | timing trim     |                                           |
+      +------+-----------------+-------------------------------------------+
+
+   Register 0x1F -- Loop-Through / Ring Power
+
+     7   6   5   4   3   2   1   0
+   +---+-------------------+-------+
+   | L |        --         | ROOPT |
+   +---+-------------------+-------+
+
+      +------+---------------------------+---------------------------------+
+      | Bits | Field                     | Meaning                         |
+      +------+---------------------------+---------------------------------+
+      | 7    | Loop-through attenuation  | 0 = enabled, 1 = disabled       |
+      |      | (LT)                      |                                 |
+      | 6:2  | --                        | Fixed '10000'                   |
+      | 1:0  | Ring-oscillator output    | 0 = -5 dB, 1 = 0 dB, 2 = -8 dB, |
+      |      | power trim                | 3 = -3 dB                       |
+      +------+---------------------------+---------------------------------+
+
+10.3.  PLL / Frequency Synthesizer
+
+   Topology: integer + 16-bit-fractional (Sigma-Delta) PLL.  VCO range
+   approximately 1.77-3.9 GHz.  A programmable LO-to-mixer divider
+   (/2 through /64, register 0x10 bits 7:5) brings the VCO down to the
+   actual local-oscillator frequency.
+
+   Deriving a target local-oscillator frequency from a requested RF
+   frequency.  Everything below (divider selection, integer/
+   fractional math, the band table of Section 10.4) takes a target
+   local-oscillator frequency (desired_LO_Hz) as input -- this is NOT
+   the same number as the RF frequency the user asked to receive.
+   Given a requested RF frequency (with the Blog V4 HF upconversion of
+   Section 11.2 already applied, if applicable), an implementation
+   MUST:
+
+   1.  Decide the harmonic index up front: if the requested RF
+       frequency exceeds 1,770,000 kHz (1.770 GHz), start directly in
+       harmonic mode (harmonic order 5 by default -- Section 9's
+       harmonic-override operation is gated to plain R820T only, so
+       this default is what actually applies on this specification's
+       target device); otherwise start at the fundamental (harmonic
+       order 1, i.e. no division).
+
+   2.  Take a sign bit from the currently selected sideband
+       (Section 9's "Set sideband" operation) XORed with the
+       harmonic-index sideband-flip flag from the table below: true
+       means subtract in the next step, false means add.
+
+   3.  Compute:
+
+          desired_LO_Hz = requested_RF_Hz {+/- from step 2}
+                          IF_center_Hz + IF_band_offset_Hz
+
+       where IF_center_Hz is the tuner's currently configured
+       delivered IF (set by the bandwidth selection of Section 10.5 --
+       3,570,000 Hz is the default) and IF_band_offset_Hz is the value
+       set by the "Set IF-passband center offset" operation
+       (Section 9, default 0 Hz).
+
+   4.  If operating in harmonic mode, divide desired_LO_Hz from step 3
+       by the harmonic order before running the synthesizer math
+       below -- that quotient is what actually gets programmed into
+       the PLL; the mixer's own harmonic content is relied on to
+       reach the true desired_LO_Hz (and hence the true RF frequency)
+       from there.
+
+   5.  If PLL lock fails while still at the fundamental, and the
+       desired_LO_Hz computed in step 3 exceeds 1,760,000 kHz, retry
+       the whole procedure forced into harmonic mode.
+
+   6.  The RF front-end band table (Section 10.4) MUST be applied
+       using the synthesizer's target LO frequency from step 3 -- not
+       the raw requested RF frequency directly (the two are only
+       ~3.57 MHz apart under the default delivered IF, which rarely
+       crosses a band-table boundary, but they are not identical).
+       The Blog V4 front-end notch and input-switching logic
+       (Section 11.3, Section 11.4), by contrast, MUST use the
+       original requested RF frequency -- before Blog V4 upconversion,
+       if that was applied.  These are deliberately different
+       frequency bases, not an inconsistency.
+
+   Divider selection: search divider values 2, 4, 8, 16, 32, 64 for
+   the smallest one that places (desired_LO_Hz * divider) inside the
+   VCO range; encode the choice as a 3-bit index (number of /2 steps
+   from 2 up to the chosen divider).
+
+   Fine VCO-band trim: after the initial divider write, reread the
+   VCO status field (register 0x04 bits 5:4) and nudge the divider
+   index by one step if the reported operating point is off-target --
+   target value 1 for R828D (vs. 2 for plain R820T) -- before running
+   the fine PLL math below.
+
+   Integer/fractional math (let ref_Hz = reference frequency in Hz,
+   after any /2 from register 0x10 bit 4; target_vco_Hz =
+   desired_LO_Hz * chosen_divider):
+
+      scaled_divider = round_half_up( target_vco_Hz * 65536 /
+                                       (2 * ref_Hz) )
+      whole_part      = scaled_divider div 65536
+      fraction_part   = scaled_divider mod 65536
+                         (written directly to registers 0x15/0x16)
+
+   o  Validity: whole_part MUST be <= 128 - 1 for R828D (128/1 - 1;
+      the divisor is the same vco-power-reference constant as the
+      fine-trim target above -- 2 for R820T giving a <=63 bound, 1 for
+      R828D giving a <=127 bound).  Reject the frequency as
+      unreachable otherwise.
+
+   o  Register encoding (register 0x14): let offset_part = whole_part
+      - 13.  Splitting that into a 6-bit low field and a 2-bit high
+      field, register 0x14 bits [5:0] = offset_part div 4, bits
+      [7:6] = offset_part mod 4 -- so on read-back, whole_part =
+      4 * (bits [5:0]) + (bits [7:6]) + 13.
+
+   o  Fractional-PLL enable (register 0x12 bit 3): clear (enabled)
+      when fraction_part != 0, set (disabled, pure integer-N) when
+      fraction_part = 0.  When fractional mode is active, dithering
+      (register 0x12 bit 4) is enabled by default.
+
+   o  Actual synthesized frequency, for verification:
+
+         LO_actual_Hz = (2 * ref_Hz * whole_part + 2 * ref_Hz *
+                          fraction_part / 65536) / chosen_divider
+
+   Lock detection: after programming, read register 0x02 bit 6.  If
+   unlocked, raise the VCO bias current (register 0x12 bits 7:5) from
+   a low default (binary 100) to a high value (binary 011) and retry
+   once before declaring failure.
+
+   Auto-tune clock rate: fastest (128 kHz, register 0x1A bits 3:2 =
+   00) while acquiring initial lock; switched to slowest/most-
+   accurate (8 kHz) once locked.
+
+   Why harmonic mixing: relying on the mixer's 5th-harmonic content
+   (rather than the fundamental) to reach the true RF frequency, per
+   the procedure above, extends an ~3.9 GHz-max VCO to cover UHF
+   frequencies beyond its fundamental reach, at the cost of reduced
+   image/spurious rejection.  Harmonic mixing also flips sideband
+   selection for harmonic orders 3, 7, 11, 15 (i.e. whenever the
+   harmonic index mod 4 = 3); other harmonic orders (2, 4, 5, 6, 8...)
+   do not flip it -- this is the flip table the sign derivation in
+   step 2 above consults.
+
+   Crystal reference values:
+
+   +---------------------------------------+------------------------+
+   | Board Configuration                   | Reference Frequency    |
+   +---------------------------------------+------------------------+
+   | Plain R828D (no board-identity match) | 16.0 MHz               |
+   | RTL-SDR Blog V4 (this document's      | 28.8 MHz (TCXO, shared |
+   | target)                               | with the demodulator)  |
+   +---------------------------------------+------------------------+
+
+                    Table 9: Tuner Reference Crystal by Board
+
+10.4.  RF Front-End Band Table
+
+   A fixed 21-row table selects tracking-filter and crystal-cap
+   settings by frequency bracket (rows scanned in ascending order;
+   the highest "band starts at" value not exceeding the synthesizer's
+   target LO frequency from Section 10.3 step 3, in MHz, is applied --
+   not the raw requested RF frequency):
+
+   +--------+------------+---------------+---------+-------------------+
+   | Band   | Open-Drain | Tracking      | Corner  | Per-Band          |
+   | Starts | (reg 0x17  | Filter (reg   | Byte    | Crystal-Cap Table |
+   | at     | bit 3)     | 0x1A bits     | (reg    | Entry (reg 0x10   |
+   | (MHz)  |            | 7:6, 1:0)     | 0x1B)   | bits 1:0)         |
+   +--------+------------+---------------+---------+-------------------+
+   | 0      | low        | engaged, low  | 0xDF    | 20 pF             |
+   |        |            | band          |         |                   |
+   | 50     | low        | engaged, low  | 0xBE    | 20 pF             |
+   |        |            | band          |         |                   |
+   | 55     | low        | engaged, low  | 0x8B    | 20 pF             |
+   |        |            | band          |         |                   |
+   | 60     | low        | engaged, low  | 0x7B    | 20 pF             |
+   |        |            | band          |         |                   |
+   | 65     | low        | engaged, low  | 0x69    | 20 pF             |
+   |        |            | band          |         |                   |
+   | 70     | low        | engaged, low  | 0x58    | 20 pF             |
+   |        |            | band          |         |                   |
+   | 75     | high       | engaged, low  | 0x44    | 20 pF             |
+   |        |            | band          |         |                   |
+   | 80     | high       | engaged, low  | 0x44    | 20 pF             |
+   |        |            | band          |         |                   |
+   | 90     | high       | engaged, low  | 0x34    | 10 pF             |
+   |        |            | band          |         |                   |
+   | 100    | high       | engaged, low  | 0x34    | 10 pF             |
+   |        |            | band          |         |                   |
+   | 110    | high       | engaged, low  | 0x24    | 10 pF             |
+   |        |            | band          |         |                   |
+   | 120    | high       | engaged, low  | 0x24    | 10 pF             |
+   |        |            | band          |         |                   |
+   | 140    | high       | engaged, low  | 0x14    | 10 pF             |
+   |        |            | band          |         |                   |
+   | 180    | high       | engaged, low  | 0x13    | 0 pF              |
+   |        |            | band          |         |                   |
+   | 220    | high       | engaged, low  | 0x13    | 0 pF              |
+   |        |            | band          |         |                   |
+   | 250    | high       | engaged, low  | 0x11    | 0 pF              |
+   |        |            | band          |         |                   |
+   | 280    | high       | engaged, low  | 0x00    | 0 pF              |
+   |        |            | band          |         |                   |
+   | 310    | high       | bypass, mid   | 0x00    | 0 pF              |
+   |        |            | band          |         |                   |
+   | 450    | high       | bypass, mid   | 0x00    | 0 pF              |
+   |        |            | band          |         |                   |
+   | 588    | high       | bypass,       | 0x00    | 0 pF              |
+   |        |            | highest band  |         |                   |
+   | 650    | high       | bypass,       | 0x00    | 0 pF              |
+   |        |            | highest band  |         |                   |
+   +--------+------------+---------------+---------+-------------------+
+
+               Table 10: RF Front-End Band Table (21 Rows)
+
+   The table above actually carries three independent per-band cap
+   values (for a 20 pF-cap policy, a 10 pF-cap policy, and a 0 pF-cap
+   policy), only one of which is read per band, depending on a
+   separate, global cap-mode selector (five possible settings: 30 pF,
+   20 pF, 10 pF, 0 pF-low-drive, 0 pF-high-drive -- the low/high split
+   controls register 0x10 bit 3, crystal drive strength, independently
+   of the cap value itself).  This selector is fixed at chip
+   initialization to "0 pF, high-drive" and never changed dynamically
+   in the reference behavior this specification is based on.  Given
+   that fixed selector, the 0 pF-policy column applies for every
+   band, and its value is 0x00 (no cap) for all 21 rows without
+   exception -- so the actually-applied register 0x10 bits[1:0] value
+   is constant 0x00 across the entire frequency range, and the
+   per-band variation shown in Table 10 (20 pF for bands below 90
+   MHz, 10 pF for 90-180 MHz, 0 pF above that) is dormant data that
+   would only take effect if a different cap-mode selector were
+   deliberately chosen.  An implementation MAY therefore treat the
+   crystal-cap field as a hardcoded 0x00, while keeping the
+   dormant per-band table above on hand in case dynamic cap-mode
+   selection is ever revisited.
+
+10.5.  IF / Baseband Filter Bandwidth Control
+
+   Wide bandwidths (requested > 4.5 MHz) use three fixed presets:
+
+   +-------------+-----------+---------+---------+--------------------+
+   | Requested   | Applied   | Reg     | Reg     | Delivered IF       |
+   | BW          | BW        | 0x0A    | 0x0B    | Center             |
+   +-------------+-----------+---------+---------+--------------------+
+   | > 7 MHz     | 8 MHz     | 0x10    | 0x0B    | 4.570 MHz          |
+   | > 6, <= 7   | 7 MHz     | 0x10    | 0x2A    | 4.570 MHz          |
+   | MHz         |           |         |         |                    |
+   | > 4.5, <=   | 6 MHz     | 0x10    | 0x6B    | 3.570 MHz          |
+   | 6 MHz       |           |         |         |                    |
+   +-------------+-----------+---------+---------+--------------------+
+
+                  Table 11: Wide Bandwidth Presets
+
+   Narrower bandwidths (<= 4.5 MHz) select the nearest row (by
+   comparing against the midpoint between adjacent entries) of an
+   18-row table.  Each row also carries a small IF correction added
+   to its nominal IF center to get the actual delivered IF; both are
+   given below.  (An alternate row set exists that splits several of
+   these entries into two steep-single-edge-filter variants for
+   independent upper/lower-sideband corner shaping, but it is
+   compiled out by default -- the plain centered-filter row is what is
+   active unless that build option is deliberately enabled.)
+
+   +----------+----------+------------+-----------+------+------+------+
+   | Nominal  | Nominal  | IF         | Delivered | Reg  | Reg  | Reg  |
+   | BW (kHz) | IF (kHz) | Correction | IF (kHz)  | 0x0A | 0x0B | 0x1E |
+   |          |          | (kHz)      |           |      |      |      |
+   +----------+----------+------------+-----------+------+------+------+
+   | 290      | 1950     | -25        | 1925      | 0x0F | 0xE7 | 0x00 |
+   | 375      | 1870     | -13        | 1857      | 0x0F | 0xE8 | 0x00 |
+   | 420      | 2100     | +21        | 2121      | 0x0F | 0xD7 | 0x00 |
+   | 470      | 1800     | -12        | 1788      | 0x0F | 0xE9 | 0x00 |
+   | 600      | 1700     | +6         | 1706      | 0x0F | 0xEA | 0x00 |
+   | 860      | 1550     | +8         | 1558      | 0x0F | 0xEB | 0x00 |
+   | 950      | 2200     | +5         | 2205      | 0x0F | 0x88 | 0x00 |
+   | 1100     | 2100     | +25        | 2125      | 0x0F | 0x89 | 0x00 |
+   | 1200     | 1350     | 0          | 1350      | 0x0F | 0xEE | 0x00 |
+   | 1300     | 2050     | -7         | 2043      | 0x0F | 0x8A | 0x00 |
+   | 1503*    | 1300     | -24        | 1276      | 0x0F | 0xEF | 0x60 |
+   | 1600     | 1900     | 0          | 1900      | 0x0F | 0x8B | 0x00 |
+   | 1753*    | 1400     | +12        | 1412      | 0x0F | 0xCF | 0x60 |
+   | 1800     | 1400     | 0          | 1400      | 0x0F | 0xAF | 0x00 |
+   | 1953*    | 1500     | +30        | 1530      | 0x0F | 0x8F | 0x60 |
+   | 2200     | 1600     | 0          | 1600      | 0x0F | 0x8F | 0x00 |
+   | 3000     | 2000     | 0          | 2000      | 0x04 | 0x8F | 0x00 |
+   | 5000     | 3570     | 0          | 3570      | 0x0B | 0x6B | 0x00 |
+   +----------+----------+------------+-----------+------+------+------+
+   * steep-corner row
+
+              Table 12: Narrow Bandwidth Filter Table (18 Rows)
+
+   Default / init-time bandwidth: 3 MHz nominal, register 0x0A = 0x0B,
+   register 0x0B = 0x6B, delivering a 3.570 MHz IF (matches the
+   widely-quoted "3.57 MHz IF" figure for this tuner family).  The
+   "wide" preset register-0x0A value (0x10) is a special case that
+   bypasses the fine-tune nibble entirely.
+
+   Filter self-calibration procedure (run at initialization and on
+   any operating-standard change):
+
+   1.  Enable the calibration clock (register 0x0F bit 2 = 1).
+
+   2.  Run the synthesizer at a fixed 56.000 MHz reference (a
+       calibration stimulus, unrelated to the receive frequency).
+
+   3.  Pulse the calibration trigger (register 0x0B bit 4: 1 then 0).
+
+   4.  Disable the calibration clock (register 0x0F bit 2 = 0).
+
+   5.  Read the result from register 0x04 bits 3:0.
+
+   6.  If the result is 0 or 15 (both out-of-range/invalid), retry
+       the whole sequence once.
+
+   7.  If still invalid, fall back to a fixed code of 0 (narrowest)
+       as a safe default.
+
+   8.  Merge the resulting 4-bit code into register 0x0A's low
+       nibble, alongside a fixed "low-Q" bit (bit 4 = 1, used for
+       bandwidths under 6 MHz).
+
+10.6.  Gain Control (LNA, Mixer, IF/VGA)
+
+   Three independently controllable stages, each switchable between
+   automatic (chip AGC) and manual mode.
+
+   Automatic mode: LNA gain-mode bit (0x05 bit 4) = 0; mixer gain-mode
+   bit (0x07 bit 4) = 1 (note the opposite polarity between the two
+   fields).  The AGC loop compares power-detector readings against
+   the threshold pairs in registers 0x0D/0x0E, with response
+   timing/bias set by the take-off-point trims in registers 0x1C/
+   0x1D.
+
+   Manual mode: both mode bits set to the opposite polarity from
+   above, with 4-bit gain codes written directly to register 0x05
+   bits 3:0 (LNA) and register 0x07 bits 3:0 (mixer).
+
+   LNA gain steps (register 0x05 bits 3:0):
+
+   +------+-----------------------------+
+   | Code | Cumulative (Relative Units) |
+   +------+-----------------------------+
+   | 0    | 0                           |
+   | 1    | 9                           |
+   | 2    | 22                          |
+   | 3    | 62                          |
+   | 4    | 100                         |
+   | 5    | 113                         |
+   | 6    | 144                         |
+   | 7    | 166                         |
+   | 8    | 192                         |
+   | 9    | 223                         |
+   | 10   | 249                         |
+   | 11   | 263                         |
+   | 12   | 282                         |
+   | 13   | 287                         |
+   | 14   | 322                         |
+   | 15   | 335                         |
+   +------+-----------------------------+
+
+                Table 13: LNA Gain Step Table
+
+   Mixer gain steps (register 0x07 bits 3:0):
+
+   +------+--------------------------------------------------------+
+   | Code | Cumulative (Relative Units)                            |
+   +------+--------------------------------------------------------+
+   | 0    | 0                                                      |
+   | 1    | 5                                                      |
+   | 2    | 15                                                     |
+   | 3    | 25                                                     |
+   | 4    | 44                                                     |
+   | 5    | 53                                                     |
+   | 6    | 63                                                     |
+   | 7    | 88                                                     |
+   | 8    | 105                                                    |
+   | 9    | 115                                                    |
+   | 10   | 123                                                    |
+   | 11   | 139                                                    |
+   | 12   | 152                                                    |
+   | 13   | 158                                                    |
+   | 14   | 161                                                    |
+   | 15   | 153 (non-monotonic: the last step is a small decrease) |
+   +------+--------------------------------------------------------+
+
+                Table 14: Mixer Gain Step Table
+
+   (Unverified -- units) The LNA and mixer tables above are relative
+   step-ordering data in the reference behavior's own internal units,
+   not confirmed absolute dB.  Implementers SHOULD independently
+   characterize real gain-per-step against a signal generator, or
+   cross-reference third-party R820T/R828D documentation, before
+   presenting these as literal dB figures.  Independent literature
+   commonly cites roughly 0-40 dB total for the LNA stage, which is
+   the right order of magnitude to sanity-check any assumed scale
+   factor against.
+
+   IF/VGA gain steps (register 0x0C bits 3:0) -- this stage does have
+   a stated, calibrated absolute scale from the register map itself:
+
+   +------+---------------------------------+
+   | Code | Approx. dB (-12.0 + code * 3.5) |
+   +------+---------------------------------+
+   | 0    | -12.0                           |
+   | 1    | -8.5                            |
+   | 2    | -5.0                            |
+   | 3    | -1.5                            |
+   | 4    | 2.0                             |
+   | 5    | 5.5                             |
+   | 6    | 9.0                             |
+   | 7    | 12.5                            |
+   | 8    | 16.0                            |
+   | 9    | 19.5                            |
+   | 10   | 23.0                            |
+   | 11   | 26.5                            |
+   | 12   | 30.0                            |
+   | 13   | 33.5                            |
+   | 14   | 37.0                            |
+   | 15   | 40.5                            |
+   +------+---------------------------------+
+
+               Table 15: IF/VGA Gain Step Table (Calibrated)
+
+   Default at initialization: code 11 (~26.5 dB).
+
+   Composite gain search: when a caller requests one overall gain
+   value (tenths of dB, per Table 7), the implementation walks the
+   LNA and mixer step tables alternately (interleaved, not "max LNA
+   first then mixer"), accumulating relative units, stopping as soon
+   as the running total meets or exceeds the requested value converted
+   to the same relative scale.  An implementation SHOULD preserve this
+   alternating-search behavior if matching existing gain-selection
+   behavior is a goal; a from-scratch design MAY instead pick any
+   monotonic allocation strategy across the two stages.
+
+   IF-gain request encoding (a host-API convenience, not a hardware
+   fact): a single integer selects meaning by range -- 0 or 10016
+   means "use the default (code 11)"; -2500..2500 maps directly
+   through the relative-unit table; 2500 (exclusive)..10000
+   (exclusive) maps through the same table after subtracting 5000
+   first; 10000..10015 maps directly to raw code 0-15; any other
+   value falls back to the default.
+
+10.7.  R828D-Specific RF Input Switching (Non-Blog-V4 Boards)
+
+   On a plain R828D board (board-identity string match failed), the
+   tuner switches between two RF inputs based on the requested RF
+   frequency (not the LO frequency of Section 10.3):
+
+   +------------+----------------+------------------------+
+   | Frequency  | Input Selected | Register 0x05 Bits 6:5 |
+   +------------+----------------+------------------------+
+   | <= 345 MHz | "Cable 1"      | 0x00                   |
+   | > 345 MHz  | "Air-in"       | 0x60                   |
+   +------------+----------------+------------------------+
+
+              Table 16: Two-Way Input Switch (Non-Blog-V4)
+
+   This specification's target device, the Blog V4, instead uses the
+   three-way switch of Section 11.4, which supersedes this simpler
+   behavior.
+
+10.8.  R820T vs. R828D Summary
+
+   +-----------+------------+-------------------------------------------+
+   | Aspect    | R820T      | R828D                                     |
+   +-----------+------------+-------------------------------------------+
+   | I2C       | 0x1A       | 0x3A                                      |
+   | address   |            |                                           |
+   | (7-bit)   |            |                                           |
+   | Typical   | 28.8 MHz   | 16.0 MHz (unless                          |
+   | reference | (board-    |                                           |
+   | crystal   | dependent) | overridden, e.g. Blog V4's 28.8 MHz TCXO) |
+   | RF inputs | One        | Two ("cable 1" / "cable 2" bits, register |
+   |           |            | 0x05 bits 6:5 and register 0x06 bit 3)    |
+   |           |            | plus board-specific switching, Section    |
+   |           |            | 10.7/11.4                                 |
+   | VCO       | 2          | 1                                         |
+   | fine-tune |            |                                           |
+   | target    |            |                                           |
+   | (Section  |            |                                           |
+   | 10.3)     |            |                                           |
+   | Chip-ID   | Register   | Identical -- address alone disambiguates  |
+   | check     | 0x00 =     |                                           |
+   |           | 0x69       |                                           |
+   +-----------+------------+-------------------------------------------+
+
+                Table 17: R820T vs. R828D Comparison
+
+10.9.  Standby / Power-Down Sequence
+
+   Triggered on device close (only if the tuner had been initialized):
+
+   +----------+-------+-------------------------------------------------+
+   | Register | Value | Effect                                          |
+   +----------+-------+-------------------------------------------------+
+   | 0x06     | 0xB1  | Power detectors off, filter gain reset          |
+   | 0x05     | 0xA0  | LNA forced to manual gain 0, RF inputs          |
+   |          |       | deselected                                      |
+   | 0x07     | 0x3A  | Mixer to manual/low-power gain                  |
+   | 0x08     | 0x40  | Mixer output buffer powered down                |
+   | 0x09     | 0xC0  | IF filter powered down                          |
+   | 0x0A     | 0x36  | Channel filter powered down                     |
+   | 0x0C     | 0x35  | VGA powered down                                |
+   | 0x0F     | 0x68  | Ring/AGC clocks disabled                        |
+   | 0x11     | 0x03  | PLL analog LDO off                              |
+   | 0x17     | 0xF4  | PLL digital LDO off                             |
+   | 0x19     | 0x0C  | RF filter powered down                          |
+   +----------+-------+-------------------------------------------------+
+
+                 Table 18: Standby Register Sequence
+
+   After standby, invalidate any cached "last operating standard"
+   state so the next power-up forces a fresh filter self-calibration
+   (Section 10.5).
+
+10.10.  Power-Up Initialization Sequence
+
+   1.  Set crystal-cap drive mode to "0 pF, high-drive" (fixed
+       default; no dynamic cap selection is exercised here despite
+       four modes existing in the register definition, Section 10.2
+       register 0x10).
+
+   2.  Reset internal frequency/IF-tracking bookkeeping to zero.
+
+   3.  Reset gain-mode bookkeeping; default IF/VGA gain code = 11.
+
+   4.  Clear any per-register manual-override table (a host-software
+       convenience unrelated to physical chip state).
+
+   5.  Write a fixed 27-byte block covering registers 0x05-0x1F with
+       power-on default values:
+
+       +----------+-----------+----------+-------+--------------+-----------+
+       | Register | Value     | Register | Value | Register     | Value     |
+       +----------+-----------+----------+-------+--------------+-----------+
+       | 0x05     | 0x80      | 0x0D     | 0x53  | 0x15         | 0x00      |
+       | 0x06     | 0x13      | 0x0E     | 0x75  | 0x16         | 0xC0      |
+       | 0x07     | 0x70      | 0x0F     | 0x68  | 0x17         | 0x30      |
+       | 0x08     | 0xC0      | 0x10     | 0x6C  | 0x18         | 0x48      |
+       | 0x09     | 0x40      | 0x11     | 0xBB  | 0x19         | 0xEC      |
+       | 0x0A     | 0xDB      | 0x12     | 0x80  | 0x1A         | 0x60      |
+       | 0x0B     | 0x6B      | 0x13     | 0x31  | 0x1B         | 0x00      |
+       | 0x0C     | 0xEB      | gain     |       | 0x1C 0x1D    | 0x24 0xDD |
+       |          | (0xE0 \   |          |       | 0x1E 0x1F    | 0x0E 0x40 |
+       |          | code 11)  |          |       |              |           |
+       +----------+-----------+----------+-------+--------------+-----------+
+
+               Table 19: Power-Up Default Register Block
+
+       Register 0x13's value (0x31) is a fixed diagnostic tag stamped
+       into the DAC field, inert since VCO control mode (bit 6) stays
+       automatic.  Registers 0x08/0x09 (image-rejection gain and
+       phase trim, Section 10.2) are left at this fixed init value
+       permanently -- no runtime image-rejection calibration routine
+       runs in the reference behavior this specification is based on,
+       despite scaffolding for a multi-trial calibration existing in
+       that implementation's data structures.  Implementers SHOULD
+       treat 0x08=0xC0/0x09=0x40 as the settled trim values unless
+       independently characterizing and calibrating image rejection
+       is a project goal.
+
+   6.  Cache the VCO bias-current field from that block as the "last
+       known good" value, to skip redundant writes during future PLL
+       lock retries (Section 10.3).
+
+   7.  Run the filter self-calibration procedure (Section 10.5),
+       using the fixed 56 MHz reference and 3.570 MHz IF-center as
+       scratch values, and apply the resulting code.
+
+   8.  Set LNA/mixer power-detector take-off-point trims and AGC
+       clock rate for the digital-receive operating point (lowest
+       take-off point, fastest-then-settled AGC clock -- the only
+       mode this specification's target device uses; an alternative
+       analog-TV-style operating point with different trims exists in
+       the register definitions but is out of scope here).  Clear
+       both RF-input-select bits to their default (deselected) state,
+       ahead of the frequency-dependent input switching of
+       Section 10.7/11.4 taking over on the first real tune request.
+
+10.11.  Demodulator-Side Reconfiguration on R828D Detection
+
+   Immediately after the R828D is identified during tuner detection
+   (Section 8, Section 6 step 7), and before the tuner's own power-up
+   sequence (Section 10.10) runs, the demodulator's own registers are
+   rewritten away from the generic power-on defaults set in
+   Section 7.1.  This MUST happen unconditionally on every device
+   open -- it is not an optional or legacy code path.
+
+   AGC-loop gain/threshold constants (empirically-tuned analog
+   gain-loop tuning, matched specifically to this tuner's noise/gain
+   profile -- the same register set is written with different
+   per-tuner-family constants for the other tuner families this
+   specification does not cover):
+
+   +--------------------------------+--------+
+   | Register (Page 1 Unless Noted) | Value  |
+   +--------------------------------+--------+
+   | 0x02                           | 0x40   |
+   | 0x03                           | 0x80   |
+   | 0x04                           | 0xCC   |
+   | 0x05                           | 0xBE   |
+   | 0x06                           | 0x35   |
+   | 0x07                           | 0x40   |
+   | 0x12                           | 0x5A   |
+   | 0xC7                           | 0x24   |
+   | 0xC8                           | 0x14   |
+   | 0xC9                           | 0x21   |
+   | 0xCA                           | 0x21   |
+   | 0xCB                           | 0x00   |
+   | 0xCD                           | 0x10   |
+   | 0xCE                           | 0x10   |
+   | 0x11 (page 0, 2 bytes)         | 0xE9F4 |
+   +--------------------------------+--------+
+
+           Table 20: R828D-Specific Demodulator AGC Constants
+
+   ADC/IF datapath reconfiguration -- this is the operationally
+   significant part: it moves the R828D path permanently off the
+   zero-IF front end that every other supported tuner family uses,
+   onto a real (non-zero) IF with only one ADC channel active:
+
+   1.  Page 1, address 0xB1 <- 0x1A: disables zero-IF mode (clears
+       the bit the boot sequence, Section 7.1 step 14, had set).
+
+   2.  Page 0, address 0x08 <- 0x4D: enables only the in-phase (I)
+       ADC input path (the same register and value used by direct
+       sampling mode, Section 7.7 -- this tuner path and direct
+       sampling mode share the same single-ADC-channel front-end
+       configuration, differing only in where the signal actually
+       comes from).
+
+   3.  IF frequency register (Section 7.3 mechanism) set to a fixed
+       3,570,000 Hz.
+
+   4.  Page 1, address 0x15 <- 0x01: enables spectrum inversion.
+
+   The practical implication for an implementer: the R828D signal
+   path is not zero-IF.  The tuner delivers its output
+   at a real 3.57 MHz IF (matching its own default filter-bandwidth
+   center, Section 10.5), single-ended into one ADC input, with the
+   demodulator doing the final digital down-conversion and
+   spectrum-flip -- not the "both ADC channels, DC-centered baseband"
+   mode the chip defaults to at power-on and that a zero-IF-only
+   implementation might otherwise assume.
+
+
+11.  RTL-SDR Blog V4 Board-Specific Behavior
+
+   All of the following applies only when the board-identity string
+   match of Section 4/Section 8 succeeds, layered on top of the plain
+   R828D behavior of Section 10.
+
+11.1.  Crystal Reference Override
+
+   Use 28.8 MHz (the board's onboard TCXO) as the reference frequency
+   (ref_Hz) throughout Section 10.3's PLL math, instead of the R828D's
+   usual 16 MHz default.
+
+11.2.  HF Upconversion
+
+   When the user requests a tuning frequency below 28.8 MHz, silently
+   retune the synthesizer to (requested_frequency_Hz + 28,800,000)
+   instead of the literal request.  Frequencies at or above 28.8 MHz
+   are left unmodified.  This substitution MUST happen before IF
+   placement, harmonic selection, and PLL programming --  everything
+   downstream operates on the shifted frequency, so a receive
+   application does not need to apply its own manual upconverter
+   offset.
+
+11.3.  Front-End Notch Filters
+
+   The open-drain bit (register 0x17 bit 3) additionally acts as a
+   notch-enable signal on this board.  Using the original,
+   pre-upconversion requested frequency:
+
+   +--------------------+------------------------+
+   | Original Frequency | Notch Bit (0x17 Bit 3) |
+   +--------------------+------------------------+
+   | <= 2.2 MHz         | 0 (off)                |
+   | 85-112 MHz         | 0 (off)                |
+   | 172-242 MHz        | 0 (off)                |
+   | Everywhere else    | 1 (on)                 |
+   +--------------------+------------------------+
+
+                  Table 21: Blog V4 Notch-Filter Bands
+
+   This implies fixed-frequency notch filters (plausibly
+   broadcast-FM and/or aviation/other service-band rejection) on the
+   board's RF front end, which MUST be disengaged when the user
+   deliberately wants to receive inside one of the three protected
+   bands.
+
+11.4.  Three-Way RF Input Switching
+
+   Using the original, pre-upconversion requested frequency, select
+   one of three input paths (bits marked "active-low" mean 0 =
+   selected for that specific field, 1 = deselected):
+
+   +------+-------------+-------------+-------------+-------------------+
+   | Band | Original    | Cable 2     | Cable 1     | Air-In (reg 0x05  |
+   |      | Frequency   | (reg 0x06   | (reg 0x05   | bit 5, active-    |
+   |      | Range       | bit 3)      | bit 6)      | low)              |
+   +------+-------------+-------------+-------------+-------------------+
+   | HF   | <= 28.8 MHz | 1           | 0           | 1 (deselect -ed)  |
+   | VHF  | > 28.8 MHz, | 0           | 1           | 1 (deselect -ed)  |
+   |      | < 250 MHz   |             |             |                   |
+   | UHF  | >= 250 MHz  | 0           | 0           | 0 (selected)      |
+   +------+-------------+-------------+-------------+-------------------+
+
+                Table 22: Blog V4 Three-Way Input Switch
+
+   An implementation MUST only issue the register write when the
+   newly-computed band differs from the previously selected one
+   (cache the state) -- this avoids unnecessary I2C traffic while
+   sweeping frequency within a band.
+
+11.5.  Fixed VGA Gain
+
+   Automatic IF/VGA gain control (Section 10.6, register 0x0C bit 4)
+   is never engaged on this board -- the external-AGC-pin mode is left
+   permanently off.  Instead the VGA MUST be held at a fixed manual
+   gain code of 8 (register 0x0C bits 3:0 = 0x08, ~16.3 dB on the
+   calibrated scale) regardless of whatever gain mode or value the
+   host application requests.  This override applies unconditionally
+   on every IF-gain-setting operation while the board is identified as
+   a Blog V4, and supersedes any numeric IF-gain value the caller
+   passed in.  The rationale (per the reference behavior this
+   specification is based on) is that automatic VGA control
+   measurably degrades performance on this specific board design
+   (spectral pumping / intermodulation artifacts), and a fixed manual
+   value performs better across its operating range -- implementers
+   SHOULD treat this as a deliberate, board-validated design choice to
+   replicate, not a limitation to "fix."
+
+
+12.  Bulk Sample Streaming
+
+   o  Sample data arrives over a single bulk IN endpoint.
+
+   o  Two access modes over that same endpoint: a synchronous
+      blocking bulk-transfer call (10 second timeout), and an
+      asynchronous mode using a pool of pre-submitted, auto-
+      resubmitting transfers with a completion callback.
+
+   o  Asynchronous pool defaults: 15 buffers, 262,144 bytes each
+      (16 x 32 x 512).  Any caller-requested buffer size SHOULD be a
+      multiple of 512 bytes (a USB bulk max-packet-size alignment
+      requirement); an implementation SHOULD fall back to the
+      262,144-byte default otherwise.
+
+   o  Zero-copy kernel-mapped DMA buffers SHOULD be used when the
+      platform supports them, falling back transparently to ordinary
+      heap buffers otherwise.
+
+   o  On each successful transfer completion: resubmit immediately
+      (keep the pipe continuously fed) and reset an internal
+      consecutive-error counter.  On a failed completion: increment
+      the counter; once consecutive failures reach the total number
+      of buffers in the pool (or a hard USB-level error occurs), treat
+      the device as lost and tear down streaming.  The
+      failure-tolerance threshold therefore scales with however many
+      buffers are configured, not a fixed constant.
+
+   o  A "reset buffer" operation (callable before starting a stream)
+      is a device-side FIFO flush only: re-arm the USB-core
+      endpoint-control register (write 0x1002 then 0x0000) with no
+      corresponding host-side buffer-queue action.
+
+   o  Sample format: interleaved unsigned 8-bit I/Q pairs (I byte, Q
+      byte, I byte, Q byte, ...) from the two ADC channels.  This
+      falls out of the ADC/datapath routing configuration of
+      Section 7.1/7.7 rather than being a separately documented
+      "format" register.
+
+
+13.  Timing Constants
+
+   +------------------------------+------------------------------------+
+   | Constant                     | Value                              |
+   +------------------------------+------------------------------------+
+   | USB control-transfer timeout | 300 ms                             |
+   | USB bulk-transfer timeout    | 10,000 ms                          |
+   | (synchronous                 |                                    |
+   | mode)                        |                                    |
+   | EEPROM inter-byte write      | 5 ms                               |
+   | delay                        |                                    |
+   | Nominal RTL2832U crystal     | 28,800,000 Hz, +/-1000 Hz accepted |
+   |                              | trim range                         |
+   | Filter self-calibration      | 56.000 MHz                         |
+   | reference                    |                                    |
+   | Default/init IF center       | 3.570 MHz                          |
+   +------------------------------+------------------------------------+
+
+                    Table 23: Timing Constants Summary
+
+
+14.  End-to-End Operation Walkthrough
+
+   The sections above document each mechanism individually; this
+   section ties them into the sequence an implementation actually
+   runs, from plugging the device in to closing it.
+
+14.1.  Phase A: Open the Device (Once per Session)
+
+   1.  Enumerate and claim the USB device (Section 4, Section 6 steps
+       1-3).
+
+   2.  Run the baseband/demodulator bring-up sequence (Section 7.1)
+       -- the chip is now in its power-on default state: zero-IF,
+       both ADC channels, no tuner configured yet.
+
+   3.  Read USB manufacturer/product strings; run tuner detection
+       (Section 8), which for this specification's target device
+       identifies the R828D and determines board identity (Blog V4
+       or plain) and the resulting reference-crystal frequency
+       (Section 10.3, Section 11.1).
+
+   4.  Apply the R828D-specific demodulator reconfiguration
+       (Section 10.11) -- this moves the signal path off the zero-IF
+       default onto the tuner's actual operating mode (real IF,
+       single ADC channel, spectrum inversion).  This step is easy to
+       miss if implementing from the boot sequence alone, since it is
+       not part of Section 7.1 -- it only runs once a tuner is
+       identified.
+
+   5.  Run the tuner's own power-up initialization (Section 10.10),
+       including the filter self-calibration (Section 10.5) that
+       establishes the default 3 MHz-nominal / 3.570 MHz-IF bandwidth
+       setting.
+
+   At this point the device is initialized but not yet tuned to a
+   meaningful frequency or streaming.
+
+14.2.  Phase B: Configure Sample Rate and Bandwidth
+
+   (Before or independent of tuning.)
+
+   1.  Set the demodulator sample rate (Section 7.5) -- this also
+       re-triggers a demodulator soft reset and rewrites the PPM
+       fine-trim registers (Section 7.4), so this SHOULD be done
+       before fine gain/frequency tuning that might be sensitive to a
+       reset-induced glitch.
+
+   2.  Optionally set tuner channel-filter bandwidth (Section 10.5,
+       via Section 9) -- this changes the tuner's delivered IF center
+       (IF_center_Hz), which feeds directly into the local-oscillator
+       math of Phase C.2 below.  If bandwidth is never explicitly
+       set, the 3 MHz-nominal / 3.570 MHz-IF default from Phase A.5
+       remains in effect.
+
+14.3.  Phase C: Tune to a Frequency
+
+   (Repeatable, callable any time after open.)
+
+   1.  If this is a Blog V4 and the requested frequency is below
+       28.8 MHz, apply the HF upconversion (Section 11.2) to get an
+       effective request frequency.
+
+   2.  Derive the target local-oscillator frequency from the
+       (possibly upconverted) requested frequency, current sideband
+       selection, current bandwidth's delivered IF, and any
+       IF-band-center offset (Section 10.3's LO-derivation procedure)
+       -- this is the step that ties bandwidth, sideband, and harmonic
+       mode together into one PLL target.
+
+   3.  Program the RF front-end band table (Section 10.4) using the
+       LO frequency from step 2, then program the PLL divider and
+       integer/fractional registers (Section 10.3) to reach it,
+       retrying in harmonic mode if needed.
+
+   4.  If this is a Blog V4, apply the front-end notch and three-way
+       input-switching logic (Section 11.3, Section 11.4) using the
+       original (pre-upconversion) requested frequency; otherwise
+       apply the plain two-way input switch (Section 10.7).
+
+   5.  Confirm PLL lock (Section 10.3 lock detection) before
+       considering the tune complete.
+
+14.4.  Phase D: Configure Gain
+
+   (Independent of tuning; can run before or after Phase C.)
+
+   Apply automatic or manual gain via the operations of Section 9
+   (Section 10.6 for the underlying register mechanics).  On a Blog
+   V4, remember that VGA gain is unconditionally pinned (Section 11.5)
+   regardless of what is requested here -- LNA and mixer gain are
+   unaffected by that override.
+
+14.5.  Phase E: Start Streaming
+
+   Begin synchronous or asynchronous bulk reads on the sample endpoint
+   (Section 12).  Phases B through D MAY be repeated at any point
+   after streaming has started (retune, change bandwidth, change
+   gain) without needing to stop and restart the stream -- none of
+   those operations touch the USB streaming endpoint or its buffer
+   pool.
+
+14.6.  Phase F: Close the Device
+
+   1.  Stop streaming (cancel any outstanding asynchronous transfers,
+       or simply stop issuing synchronous reads).
+
+   2.  Run the tuner's standby/power-down sequence (Section 10.9).
+
+   3.  Power down the demodulator and ADCs (Section 7.1's deinit
+       step).
+
+   4.  Release the USB interface.
+
+
+15.  Implementation Notes and Open Issues
+
+   The following items, consolidated from notes throughout this
+   document, SHOULD NOT be treated as settled hardware fact without
+   further independent confirmation:
+
+   1.  Register access byte-order asymmetry (Section 5.2): big-endian
+       on write, little-endian reassembly on read, for 2-byte scalar
+       register access.  Implementers SHOULD verify against a USB
+       capture on real hardware; this could be an artifact of how
+       2-byte values happen to be used in practice rather than a
+       universal rule.
+
+   2.  EEPROM content layout (Section 5.6): the layout for bytes 0-78
+       is documented; the purpose of the fixed 0x02 value at offset
+       8, and the content/meaning of bytes 79-255, are not determined
+       from this pass.
+
+   3.  GPIO output-enable vs. pull/disable register semantics
+       (Section 7.9): which register is true direction control and
+       which is a pull/pin-disable register is inferred from usage
+       patterns, not confirmed from an authoritative register
+       reference.  Getting this backwards would invert GPIO direction
+       behavior.
+
+   4.  Register 0x06 (page 0) reuse (Section 7.1 step 13,
+       Section 7.7): the same demodulator register carries at least
+       three different meanings (boot default, I-ADC-direct select,
+       Q-ADC-direct select) via values 0x80/0x90/0xCD; only bit 4 and
+       the low nibble are confirmed to matter, the rest of each
+       byte's set bits are unconfirmed.
+
+   5.  Direct-sampling auto-switch default threshold for R828D
+       (Section 7.7): the reference behavior itself treats this as an
+       uncertain default; implementers SHOULD NOT treat any specific
+       number as an authoritative hardware constant.
+
+   6.  R828D bit-reversal on I2C reads (Section 10, introductory
+       text): confirmed present in the reference behavior but
+       unexplained -- SHOULD be confirmed via logic-analyzer capture
+       as to whether this is a genuine chip-level serialization quirk
+       or an artifact of one particular I2C bridge implementation.
+
+   7.  VCO valid-range upper bound (Section 10.3): two different
+       figures appear in different contexts -- a true silicon maximum
+       near 3.9 GHz, and a more conservative self-imposed limit of
+       exactly 2x the 1.77 GHz floor (3.54 GHz).  Implementers SHOULD
+       confirm which applies in the R828D/Blog-V4 configuration.
+
+   8.  Register 0x05 bits [6:5] vs. bit [5] overlap (Section 10.2):
+       documented both as part of a 2-bit RF-input-select field and,
+       separately, as a standalone "LNA1 power" bit -- these appear to
+       be mutually exclusive interpretations depending on chip
+       variant, not fully disambiguated here.  Treat with care.
+
+   9.  LNA and mixer gain-step table units (Section 10.6): confirmed
+       relative-ordering data only -- the VGA stage has a stated
+       absolute dB scale, but LNA/mixer do not.  Implementers SHOULD
+       independently characterize against a signal generator, or
+       corroborate against third-party documentation for the same
+       silicon, before treating the numbers in Section 10.6 as
+       literal dB.
+
+   10. "Raw register write" vs. "register override" API distinction
+       -- RESOLVED: see Section 9; the override is confirmed to
+       persist across later automatic register rewrites (enforced
+       centrally in the shared I2C-write path), unlike the plain
+       raw-register write.
+
+
+16.  Security Considerations
+
+   This document describes receive-only RF hardware and a local
+   USB/I2C control protocol; it does not describe a network protocol
+   and has no remote attack surface of its own.  The following
+   considerations are nonetheless relevant to an implementation based
+   on this document:
+
+   o  This is a receive-only device.  Nothing in this specification
+      enables or describes RF transmission; unauthorized-transmission
+      concerns are not applicable.
+
+   o  Firmware or driver code implementing the register-write
+      sequences in this document SHOULD validate host-supplied
+      parameters (requested frequency, gain, sample rate, bandwidth)
+      before converting them into register writes.  Several register
+      fields in Section 10.2 are marked with fixed/reserved bit
+      patterns ("Fixed '1'", "Fixed '011'", etc.); writing a value
+      that disturbs those reserved bits, or a frequency/gain
+      parameter outside the validated ranges given in this document
+      (e.g. Section 7.5's sample-rate range, Section 10.3's PLL
+      divider validity bound), may place the device into an
+      undocumented or unstable state.  This is a robustness concern,
+      not a known exploitable vulnerability.
+
+   o  The I2C repeater (Section 5.3) is shared, global, chip-wide
+      state.  An implementation that does not correctly serialize
+      concurrent access to it (e.g. from multiple threads) could
+      interleave unrelated I2C transactions and misprogram either the
+      demodulator or the tuner; this is a correctness hazard local to
+      a single host process, not a remotely exploitable condition.
+
+   o  Register field combinations in Section 10.2 marked "Fixed" are
+      constant-value bits observed in the reference behavior this
+      document is based on; this document does not claim they are
+      hardware-enforced.  An implementation SHOULD NOT rely on the
+      chip itself rejecting an out-of-specification write to such a
+      field.
+
+
+17.  References
+
+17.1.  Normative References
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/info/rfc2119>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in
+              RFC 2119 Key Words", BCP 14, RFC 8174,
+              DOI 10.17487/RFC8174, May 2017,
+              <https://www.rfc-editor.org/info/rfc8174>.
+
+17.2.  Informative References
+
+   [USB2.0]   USB Implementers Forum, "Universal Serial Bus
+              Specification, Revision 2.0", April 2000,
+              <https://www.usb.org/document-library/usb-20>.
+
+
+Author's Address
+
+   [Author name and contact information omitted from this draft]

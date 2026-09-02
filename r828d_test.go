@@ -113,7 +113,10 @@ func TestNearestVGAStep(t *testing.T) {
 }
 
 func TestLOTargets(t *testing.T) {
-	tu := &Tuner{ifCenterHz: 3_570_000, sidebandUpper: false}
+	tu := &Tuner{
+		ifCenterHz:    3_570_000,
+		sidebandUpper: false,
+	}
 	// Fundamental: LO sits exactly one IF center away from the
 	// requested frequency, and is unprogrammed (program == lo).
 	lo, program := tu.loTargets(100_000_000, 1)

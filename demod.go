@@ -150,7 +150,9 @@ const (
 	modeInternalAGC = 0x25
 )
 
-func setMode(t Transport, val uint16) error { return demodWriteReg(t, 0, 0x19, val, 1) }
+func setMode(t Transport, val uint16) error {
+	return demodWriteReg(t, 0, 0x19, val, 1)
+}
 
 // setIF programs the 22-bit two's-complement IF NCO phase-increment
 // register (RFC §7.3):

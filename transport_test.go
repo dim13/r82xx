@@ -33,7 +33,9 @@ func (f *fakeTransport) ControlOut(wValue, wIndex uint16, data []byte) error {
 	return nil
 }
 
-func (f *fakeTransport) BulkIn(data []byte) (int, error) { return len(data), nil }
+func (f *fakeTransport) BulkIn(data []byte) (int, error) {
+	return len(data), nil
+}
 
 func (f *fakeTransport) Strings() (string, string, error) {
 	return f.manufacturer, f.product, nil
@@ -96,12 +98,19 @@ func (r *recordingTransport) ControlIn(wValue, wIndex uint16, data []byte) (int,
 	n := copy(data, r.inData)
 	return n, nil
 }
+
 func (r *recordingTransport) ControlOut(wValue, wIndex uint16, data []byte) error {
 	r.lastOut = append([]byte(nil), data...)
 	return nil
 }
-func (r *recordingTransport) BulkIn(data []byte) (int, error)  { return 0, nil }
-func (r *recordingTransport) Strings() (string, string, error) { return "", "", nil }
+
+func (r *recordingTransport) BulkIn(data []byte) (int, error) {
+	return 0, nil
+}
+
+func (r *recordingTransport) Strings() (string, string, error) {
+	return "", "", nil
+}
 
 func TestI2CAddr8(t *testing.T) {
 	if got, want := i2cAddr8(0x3a), uint16(0x74); got != want {

@@ -10,7 +10,9 @@ import (
 
 // Read performs one synchronous blocking bulk read into buf. Transport
 // implementations SHOULD apply the 10s bulk timeout themselves.
-func (d *Device) Read(buf []byte) (int, error) { return d.t.BulkIn(buf) }
+func (d *Device) Read(buf []byte) (int, error) {
+	return d.t.BulkIn(buf)
+}
 
 // ResetBuffer is a device-side FIFO flush, callable before starting a
 // stream: re-arms the USB-core endpoint-control register with no

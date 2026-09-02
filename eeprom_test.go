@@ -36,7 +36,9 @@ func TestDecodeLayoutBadMagic(t *testing.T) {
 }
 
 func TestEncodeLayoutTruncation(t *testing.T) {
-	long := Layout{Manufacturer: "this manufacturer string is deliberately far too long to fit"}
+	long := Layout{
+		Manufacturer: "this manufacturer string is deliberately far too long to fit",
+	}
 	if _, err := EncodeLayout(long); err != ErrEEPROMTruncated {
 		t.Errorf("EncodeLayout(long) err = %v, want ErrEEPROMTruncated", err)
 	}

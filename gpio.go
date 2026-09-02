@@ -8,7 +8,9 @@ type GPIORegs struct {
 	Input, Output, OutputEnable, PullDisable uint8
 }
 
-func gpioBit(pin int) uint16 { return 1 << uint(pin) }
+func gpioBit(pin int) uint16 {
+	return 1 << uint(pin)
+}
 
 // ReadPin reads one GPIO input line's state.
 func ReadPin(t Transport, r GPIORegs, pin int) (bool, error) {

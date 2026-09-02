@@ -29,10 +29,14 @@ func (tu *Tuner) SetGainMode(auto bool) error {
 }
 
 // SetLNAGain sets the manual LNA gain code (0-15).
-func (tu *Tuner) SetLNAGain(code int) error { return tu.setField(0x05, 0x0f, 0, byte(code)) }
+func (tu *Tuner) SetLNAGain(code int) error {
+	return tu.setField(0x05, 0x0f, 0, byte(code))
+}
 
 // SetMixerGain sets the manual mixer gain code (0-15).
-func (tu *Tuner) SetMixerGain(code int) error { return tu.setField(0x07, 0x0f, 0, byte(code)) }
+func (tu *Tuner) SetMixerGain(code int) error {
+	return tu.setField(0x07, 0x0f, 0, byte(code))
+}
 
 // GainReadback reads the chip's current mixer/LNA gain codes
 // (register 0x03).

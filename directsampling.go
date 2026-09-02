@@ -62,4 +62,6 @@ func disableDirectSamplingOther(t Transport, crystalHz float64) error {
 // Offset tuning (RFC §7.8, 85% of the Nyquist half-rate) is rejected
 // outright for the R820T/R828D path and never called by Device; kept
 // only for completeness against the wider device family.
-func offsetHz(sampleRateHz float64) float64 { return (sampleRateHz / 2) * 1.7 }
+func offsetHz(sampleRateHz float64) float64 {
+	return (sampleRateHz / 2) * 1.7
+}

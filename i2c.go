@@ -3,7 +3,9 @@ package r82xx
 // I2C bus pass-through, block 6 (RFC §5.3). wValue holds the I2C slave
 // address in 8-bit form (7-bit address shifted left by one, R/W bit 0).
 
-func i2cAddr8(addr7 uint8) uint16 { return uint16(addr7) << 1 }
+func i2cAddr8(addr7 uint8) uint16 {
+	return uint16(addr7) << 1
+}
 
 // i2cWrite performs a burst write: register offset followed by data,
 // one I2C transaction (register address auto-increments on the wire).
@@ -38,8 +40,12 @@ func i2cRead(t Transport, addr7, reg uint8, n int) ([]byte, error) {
 // callers MUST serialize concurrent tuner-facing I2C transactions
 // (Device.mu does this for every exported method).
 
-func repeaterEnable(t Transport) error  { return demodWriteReg(t, 1, 0x01, 0x18, 1) }
-func repeaterDisable(t Transport) error { return demodWriteReg(t, 1, 0x01, 0x10, 1) }
+func repeaterEnable(t Transport) error {
+	return demodWriteReg(t, 1, 0x01, 0x18, 1)
+}
+func repeaterDisable(t Transport) error {
+	return demodWriteReg(t, 1, 0x01, 0x10, 1)
+}
 
 func withRepeater(t Transport, fn func() error) error {
 	if err := repeaterEnable(t); err != nil {

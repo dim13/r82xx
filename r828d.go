@@ -125,7 +125,9 @@ func (tu *Tuner) RawWrite(reg uint8, mask, val byte) error {
 }
 
 // RawRead is the escape-hatch masked register read.
-func (tu *Tuner) RawRead(reg, mask uint8) byte { return tu.regs[reg] & mask }
+func (tu *Tuner) RawRead(reg, mask uint8) byte {
+	return tu.regs[reg] & mask
+}
 
 // Override pins mask bits of reg to val, enforced on every subsequent
 // write until cleared (Table 7 "register override").

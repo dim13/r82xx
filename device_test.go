@@ -57,7 +57,9 @@ func (s *smokeTransport) ControlOut(wValue, wIndex uint16, data []byte) error {
 	return nil
 }
 
-func (s *smokeTransport) BulkIn(data []byte) (int, error) { return len(data), nil }
+func (s *smokeTransport) BulkIn(data []byte) (int, error) {
+	return len(data), nil
+}
 
 func (s *smokeTransport) Strings() (string, string, error) {
 	return s.manufacturer, s.product, nil

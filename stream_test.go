@@ -41,4 +41,6 @@ var errAlwaysFails = errBulk{}
 
 type errBulk struct{}
 
-func (errBulk) Error() string { return "bulk transfer failed" }
+func (errBulk) Error() string {
+	return "bulk transfer failed"
+}

@@ -1,6 +1,9 @@
 package r82xx
 
-import "math"
+import (
+	"errors"
+	"math"
+)
 
 // Demodulator paged-register access (RFC §5.4): wValue = (addr<<8)|0x20,
 // wIndex = page (read) or 0x10|page (write). Every write MUST be
@@ -215,15 +218,7 @@ const (
 // SampleRateRange are the only two valid input ranges for SetSampleRate
 // (RFC §7.5); the sub-range (300_000, 900_000] is an unrepresentable
 // resampler dead zone.
-var (
-	ErrSampleRateRange = sampleRateRangeError{}
-)
-
-type sampleRateRangeError struct{}
-
-func (sampleRateRangeError) Error() string {
-	return "sample rate must be in (225000, 300000] or (900000, 3200000] Hz"
-}
+var ErrSampleRateRange = errors.New("sample rate must be in (225000, 300000] or (900000, 3200000] Hz")
 
 func validSampleRate(hz uint32) bool {
 	return (hz > 225_000 && hz <= 300_000) || (hz > 900_000 && hz <= 3_200_000)

@@ -1,4 +1,4 @@
-package r82xx
+package tuner
 
 // bwRow is one entry of the narrow (<=4.5MHz) bandwidth table (RFC
 // Table 12, 18 rows).

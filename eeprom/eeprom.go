@@ -1,28 +1,31 @@
-package r82xx
+// Package eeprom implements the RTL2832U EEPROM access and layout
+// encoding (RFC §5.5, §5.6): an I2C device at 7-bit address 0x50,
+// 256 bytes, byte-by-byte, no burst reads.
+package eeprom
 
 import (
 	"errors"
 	"time"
+
+	"github.com/dim13/r82xx/i2c"
+	"github.com/dim13/r82xx/wire"
 )
 
-// EEPROM access (RFC §5.5): an I2C device at 7-bit address 0x50,
-// 256 bytes, byte-by-byte, no burst reads.
 const (
-	eepromAddr7 = 0x50
-	eepromSize  = 256
+	addr7 = 0x50
 
-	eepromWriteDelay = 5 * time.Millisecond
+	writeDelay = 5 * time.Millisecond
 )
 
-// ErrEEPROMTruncated means the manufacturer/product/serial strings
-// don't fit the layout's 69-byte window.
-var ErrEEPROMTruncated = errors.New("eeprom: string descriptors exceed 69-byte window")
+// ErrTruncated means the manufacturer/product/serial strings don't fit
+// the layout's 69-byte window.
+var ErrTruncated = errors.New("eeprom: string descriptors exceed 69-byte window")
 
-// ReadEEPROM reads n bytes starting at offset off.
-func ReadEEPROM(t Transport, off uint8, n int) ([]byte, error) {
+// Read reads n bytes starting at offset off.
+func Read(t wire.Transport, off uint8, n int) ([]byte, error) {
 	buf := make([]byte, n)
 	for i := range buf {
-		b, err := i2cRead(t, eepromAddr7, off+uint8(i), 1)
+		b, err := i2c.Read(t, addr7, off+uint8(i), 1)
 		if err != nil {
 			return nil, err
 		}
@@ -31,22 +34,22 @@ func ReadEEPROM(t Transport, off uint8, n int) ([]byte, error) {
 	return buf, nil
 }
 
-// WriteEEPROM writes data starting at offset off, skipping a byte
-// whose value already matches to avoid unnecessary EEPROM wear.
-func WriteEEPROM(t Transport, off uint8, data []byte) error {
+// Write writes data starting at offset off, skipping a byte whose
+// value already matches to avoid unnecessary EEPROM wear.
+func Write(t wire.Transport, off uint8, data []byte) error {
 	for i, want := range data {
 		addr := off + uint8(i)
-		cur, err := i2cRead(t, eepromAddr7, addr, 1)
+		cur, err := i2c.Read(t, addr7, addr, 1)
 		if err != nil {
 			return err
 		}
 		if cur[0] == want {
 			continue
 		}
-		if err := i2cWrite(t, eepromAddr7, addr, []byte{want}); err != nil {
+		if err := i2c.Write(t, addr7, addr, []byte{want}); err != nil {
 			return err
 		}
-		time.Sleep(eepromWriteDelay)
+		time.Sleep(writeDelay)
 	}
 	return nil
 }
@@ -65,13 +68,13 @@ type Layout struct {
 }
 
 const (
-	eepromMagic0, eepromMagic1 = 0x28, 0x32
-	eepromCfgBase              = 0x14 // base value of the config-flags byte, remaining bits fixed
+	magic0, magic1 = 0x28, 0x32
+	cfgBase        = 0x14 // base value of the config-flags byte, remaining bits fixed
 )
 
 // DecodeLayout parses the first 79 bytes of an EEPROM dump.
 func DecodeLayout(b []byte) (Layout, error) {
-	if len(b) < 79 || b[0] != eepromMagic0 || b[1] != eepromMagic1 {
+	if len(b) < 79 || b[0] != magic0 || b[1] != magic1 {
 		return Layout{}, errors.New("eeprom: bad header magic")
 	}
 	l := Layout{
@@ -104,16 +107,16 @@ func EncodeLayout(l Layout) ([]byte, error) {
 		return nil, err
 	}
 	if len(strs) > 69 {
-		return nil, ErrEEPROMTruncated
+		return nil, ErrTruncated
 	}
 	b := make([]byte, 79)
-	b[0], b[1] = eepromMagic0, eepromMagic1
+	b[0], b[1] = magic0, magic1
 	b[2], b[3] = byte(l.VendorID), byte(l.VendorID>>8)
 	b[4], b[5] = byte(l.ProductID), byte(l.ProductID>>8)
 	if l.SerialEnable {
 		b[6] = 0xa5
 	}
-	cfg := byte(eepromCfgBase)
+	cfg := byte(cfgBase)
 	if l.RemoteWakeup {
 		cfg |= 0x01
 	}
@@ -155,7 +158,7 @@ func encodeUSBStrings(strs ...string) ([]byte, error) {
 	for _, s := range strs {
 		n := 2 + 2*len(s)
 		if n > 255 {
-			return nil, ErrEEPROMTruncated
+			return nil, ErrTruncated
 		}
 		d := make([]byte, n)
 		d[0], d[1] = byte(n), 0x03

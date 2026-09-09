@@ -1,41 +1,14 @@
-package r82xx
+// Package demod implements the RTL2832U baseband demodulator: paged
+// register bring-up, IF/PPM tuning, sample-rate programming, and the
+// R820T/R828D-family reconfiguration layered on top of it (RFC §7).
+package demod
 
 import (
 	"errors"
 	"math"
+
+	"github.com/dim13/r82xx/wire"
 )
-
-// Demodulator paged-register access (RFC §5.4): wValue = (addr<<8)|0x20,
-// wIndex = page (read) or 0x10|page (write). Every write MUST be
-// followed by a fixed dummy read (page 0x0A, address 0x01) as a
-// commit/flush step.
-
-func demodReadReg(t Transport, page, addr uint8, n int) (uint16, error) {
-	wValue := uint16(addr)<<8 | 0x20
-	buf := make([]byte, n)
-	if _, err := t.ControlIn(wValue, uint16(page), buf); err != nil {
-		return 0, err
-	}
-	if n == 1 {
-		return uint16(buf[0]), nil
-	}
-	return uint16(buf[0]) | uint16(buf[1])<<8, nil
-}
-
-func demodWriteReg(t Transport, page, addr uint8, val uint16, n int) error {
-	wValue := uint16(addr)<<8 | 0x20
-	buf := make([]byte, n)
-	if n == 1 {
-		buf[0] = byte(val)
-	} else {
-		buf[0], buf[1] = byte(val>>8), byte(val)
-	}
-	if err := t.ControlOut(wValue, 0x10|uint16(page), buf); err != nil {
-		return err
-	}
-	_, err := demodReadReg(t, 0x0a, 0x01, 1) // required commit/flush read
-	return err
-}
 
 // defaultFIRCoeffs is a built-in default channel FIR tuned generically
 // for FM/DAB-style bandwidths (RFC §7.2). Coefficients are a tunable
@@ -50,7 +23,7 @@ var defaultFIRCoeffs = [16]int16{
 // bytes to page 1, addresses 0x1C-0x2F: the first 8 taps as signed
 // 8-bit values, the remaining 8 as signed 12-bit values packed two per
 // three bytes.
-func writeFIR(t Transport, taps [16]int16) error {
+func writeFIR(t wire.Transport, taps [16]int16) error {
 	var buf [20]byte
 	for i := range 8 {
 		buf[i] = byte(int8(taps[i]))
@@ -70,27 +43,28 @@ func writeFIR(t Transport, taps [16]int16) error {
 	return nil
 }
 
-// Fixed bring-up sequence, run once at device open (RFC §7.1).
-func basebandInit(t Transport) error {
+// BasebandInit runs the fixed bring-up sequence, once at device open
+// (RFC §7.1).
+func BasebandInit(t wire.Transport) error {
 	steps := []struct {
-		blk  block
+		blk  wire.Block
 		addr uint16
 		val  uint16
 		n    int
 	}{
-		{blockSys, 0x00, 0x09, 1}, // liveness / system-control
-		{blockUSB, 0x00, 0x0002, 2},
-		{blockUSB, 0x00, 0x1002, 2},
+		{wire.Sys, 0x00, 0x09, 1}, // liveness / system-control
+		{wire.USB, 0x00, 0x0002, 2},
+		{wire.USB, 0x00, 0x1002, 2},
 	}
 	for _, s := range steps {
-		if err := writeReg(t, s.blk, s.addr, s.val, s.n); err != nil {
+		if err := s.blk.WriteReg(t, s.addr, s.val, s.n); err != nil {
 			return err
 		}
 	}
-	if err := writeReg(t, blockSys, 0x01, 0x22, 1); err != nil { // demod-control-1
+	if err := wire.Sys.WriteReg(t, 0x01, 0x22, 1); err != nil { // demod-control-1
 		return err
 	}
-	if err := writeReg(t, blockSys, 0x02, 0xe8, 1); err != nil { // demod-control: power on
+	if err := wire.Sys.WriteReg(t, 0x02, 0xe8, 1); err != nil { // demod-control: power on
 		return err
 	}
 
@@ -139,22 +113,10 @@ func basebandInit(t Transport) error {
 	return nil
 }
 
-// demodPowerDown powers off the demodulator and ADCs (RFC §7.1 step 5,
+// PowerDown powers off the demodulator and ADCs (RFC §7.1 step 5,
 // device-close direction: same register takes 0x20 on power-down).
-func demodPowerDown(t Transport) error {
-	return writeReg(t, blockSys, 0x02, 0x20, 1)
-}
-
-// mode values for page 0, address 0x19 (RFC §7.6): the same register
-// used for "SDR mode" at boot.
-const (
-	modeNormal      = 0x05 // SDR mode on, test mode off, internal AGC off
-	modeTest        = 0x03
-	modeInternalAGC = 0x25
-)
-
-func setMode(t Transport, val uint16) error {
-	return demodWriteReg(t, 0, 0x19, val, 1)
+func PowerDown(t wire.Transport) error {
+	return wire.Sys.WriteReg(t, 0x02, 0x20, 1)
 }
 
 // setIF programs the 22-bit two's-complement IF NCO phase-increment
@@ -165,7 +127,7 @@ func setMode(t Transport, val uint16) error {
 // split MSB-first across page-1 registers 0x19 (bits 21:16, masked to
 // 6 bits), 0x1A (bits 15:8) and 0x1B (bits 7:0). MUST be recomputed
 // against the current PPM-corrected crystal value on every change.
-func setIF(t Transport, ifHz float64, crystalHz float64) error {
+func setIF(t wire.Transport, ifHz float64, crystalHz float64) error {
 	v := ifRegValue(ifHz, crystalHz)
 	if err := demodWriteReg(t, 1, 0x19, uint16((v>>16)&0x3f), 1); err != nil {
 		return err
@@ -181,7 +143,7 @@ func ifRegValue(ifHz, crystalHz float64) int32 {
 	return int32(v) & 0x3fffff
 }
 
-func setSpectrumInversion(t Transport, invert bool) error {
+func setSpectrumInversion(t wire.Transport, invert bool) error {
 	v := uint16(0)
 	if invert {
 		v = 1
@@ -189,8 +151,9 @@ func setSpectrumInversion(t Transport, invert bool) error {
 	return demodWriteReg(t, 1, 0x15, v, 1)
 }
 
-// RFC §7.4.
-func correctedHz(nominalHz float64, ppm float64) float64 {
+// CorrectedHz applies PPM correction to a nominal reference (RFC
+// §7.4).
+func CorrectedHz(nominalHz float64, ppm float64) float64 {
 	return nominalHz * (1 + ppm/1e6)
 }
 
@@ -202,7 +165,9 @@ func ppmTrim(ppm float64) int16 {
 	return int16(math.Round(-ppm * (1 << 24) / 1e6))
 }
 
-func setPPM(t Transport, ppm float64) error {
+// SetPPM applies frequency-correction PPM to the demodulator resampler
+// (RFC §7.4).
+func SetPPM(t wire.Transport, ppm float64) error {
 	trim := uint16(ppmTrim(ppm))
 	if err := demodWriteReg(t, 1, 0x3f, trim&0xff, 1); err != nil {
 		return err
@@ -211,13 +176,17 @@ func setPPM(t Transport, ppm float64) error {
 }
 
 const (
-	nominalCrystalHz = 28_800_000
-	defaultIFHz      = 3_570_000 // matches the tuner's own default filter-bandwidth center
+	// NominalCrystalHz is the demodulator's nominal reference (RFC §7).
+	NominalCrystalHz = 28_800_000
+	// DefaultIFHz matches the tuner's own default filter-bandwidth
+	// center; shared between the demodulator's IF NCO and the tuner's
+	// initial IF-center bookkeeping.
+	DefaultIFHz = 3_570_000
 )
 
-// SampleRateRange are the only two valid input ranges for SetSampleRate
-// (RFC §7.5); the sub-range (300_000, 900_000] is an unrepresentable
-// resampler dead zone.
+// ErrSampleRateRange is returned by SetSampleRate for a requested rate
+// outside the two valid input ranges; the sub-range (300_000, 900_000]
+// is an unrepresentable resampler dead zone (RFC §7.5).
 var ErrSampleRateRange = errors.New("sample rate must be in (225000, 300000] or (900000, 3200000] Hz")
 
 func validSampleRate(hz uint32) bool {
@@ -234,9 +203,10 @@ func resamplerRatio(crystalHz float64, requestedHz uint32) (ratio uint32, achiev
 	return r, crystalHz * (1 << 22) / float64(real)
 }
 
-// Every sample-rate change requires a fresh PPM trim and soft reset
-// (RFC §7.5).
-func setSampleRate(t Transport, crystalHz float64, ppm float64, requestedHz uint32) (achievedHz float64, err error) {
+// SetSampleRate applies a requested sample rate, rewriting the PPM
+// fine trim and re-triggering a soft reset -- every sample-rate change
+// requires both (RFC §7.5).
+func SetSampleRate(t wire.Transport, crystalHz float64, ppm float64, requestedHz uint32) (achievedHz float64, err error) {
 	if !validSampleRate(requestedHz) {
 		return 0, ErrSampleRateRange
 	}
@@ -247,7 +217,7 @@ func setSampleRate(t Transport, crystalHz float64, ppm float64, requestedHz uint
 	if err := demodWriteReg(t, 1, 0xa1, uint16(ratio), 2); err != nil {
 		return 0, err
 	}
-	if err := setPPM(t, ppm); err != nil {
+	if err := SetPPM(t, ppm); err != nil {
 		return 0, err
 	}
 	if err := demodWriteReg(t, 1, 0x01, 0x14, 1); err != nil { // soft reset

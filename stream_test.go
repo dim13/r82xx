@@ -6,6 +6,26 @@ import (
 	"time"
 )
 
+// fakeTransport is a minimal in-memory Transport: it always succeeds
+// and echoes zero bytes on read.
+type fakeTransport struct{}
+
+func (f *fakeTransport) ControlIn(wValue, wIndex uint16, data []byte) (int, error) {
+	return len(data), nil
+}
+
+func (f *fakeTransport) ControlOut(wValue, wIndex uint16, data []byte) error {
+	return nil
+}
+
+func (f *fakeTransport) BulkIn(data []byte) (int, error) {
+	return len(data), nil
+}
+
+func (f *fakeTransport) Strings() (string, string, error) {
+	return "", "", nil
+}
+
 func TestReadAsyncStop(t *testing.T) {
 	d := &Device{t: &fakeTransport{}}
 	var n atomic.Int64

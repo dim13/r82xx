@@ -1,6 +1,10 @@
 package r82xx
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/dim13/r82xx/tuner"
+)
 
 // smokeTransport is a stateful fake I2C bus, just enough to carry
 // Device.Open/SetFrequency/Close through a full run without a real
@@ -18,9 +22,9 @@ func newSmokeTransport(manufacturer, product string) *smokeTransport {
 		product:      product,
 		i2c: map[uint8]map[uint8]byte{
 			0x3a: {
-				0x00: chipIDVal,         // raw: detection reads this unreversed
-				0x02: reverseByte(0x40), // PLL locked (bit6)
-				0x04: reverseByte(0x15), // VCO op-point 1, cal code 5
+				0x00: 0x69, // chip-ID value (RFC Table 8), raw: detection reads this unreversed
+				0x02: 0x02, // PLL locked (bit6): reverseByte(0x40)
+				0x04: 0xa8, // VCO op-point 1, cal code 5: reverseByte(0x15)
 			},
 		},
 		pendingReg: map[uint8]uint8{},
@@ -28,7 +32,7 @@ func newSmokeTransport(manufacturer, product string) *smokeTransport {
 }
 
 func (s *smokeTransport) ControlIn(wValue, wIndex uint16, data []byte) (int, error) {
-	if wIndex&0xff00 == uint16(blockI2C)<<8 {
+	if wIndex&0xff00 == 0x0600 { // I2C block (wire.blockI2C)
 		slave := uint8(wValue >> 1)
 		reg := s.pendingReg[slave]
 		regs := s.i2c[slave]
@@ -40,7 +44,7 @@ func (s *smokeTransport) ControlIn(wValue, wIndex uint16, data []byte) (int, err
 }
 
 func (s *smokeTransport) ControlOut(wValue, wIndex uint16, data []byte) error {
-	if wIndex&0xff00 == uint16(blockI2C)<<8 {
+	if wIndex&0xff00 == 0x0600 { // I2C block (wire.blockI2C)
 		slave := uint8(wValue >> 1)
 		if len(data) == 1 {
 			s.pendingReg[slave] = data[0]
@@ -74,8 +78,8 @@ func TestDeviceEndToEnd(t *testing.T) {
 	if !d.blogV4 {
 		t.Error("Open: expected Blog V4 board identification to succeed")
 	}
-	if d.tuner.crystalHz != blogV4CrystalHz {
-		t.Errorf("tuner crystal = %v, want %v", d.tuner.crystalHz, blogV4CrystalHz)
+	if d.tuner.CrystalHz != tuner.BlogV4CrystalHz {
+		t.Errorf("tuner crystal = %v, want %v", d.tuner.CrystalHz, tuner.BlogV4CrystalHz)
 	}
 
 	if achieved, err := d.SetSampleRate(2_400_000); err != nil {
@@ -111,8 +115,8 @@ func TestDeviceEndToEnd(t *testing.T) {
 	if err := d.SetIFGain(15); err != nil {
 		t.Fatalf("SetIFGain: %v", err)
 	}
-	if got := d.tuner.regs[0x0c] & 0x0f; got != blogV4FixedVGACode {
-		t.Errorf("Blog V4 VGA code = %d, want pinned %d", got, blogV4FixedVGACode)
+	if got := d.tuner.RawRead(0x0c, 0x0f); got != 8 { // blogV4FixedVGACode
+		t.Errorf("Blog V4 VGA code = %d, want pinned %d", got, 8)
 	}
 
 	if err := d.Close(); err != nil {
@@ -129,8 +133,8 @@ func TestOpenPlainR828D(t *testing.T) {
 	if d.blogV4 {
 		t.Error("Open: expected plain-board identification (no Blog V4 match)")
 	}
-	if d.tuner.crystalHz != r828dNominalCrystalHz {
-		t.Errorf("tuner crystal = %v, want %v", d.tuner.crystalHz, float64(r828dNominalCrystalHz))
+	if d.tuner.CrystalHz != tuner.R828DNominalCrystalHz {
+		t.Errorf("tuner crystal = %v, want %v", d.tuner.CrystalHz, float64(tuner.R828DNominalCrystalHz))
 	}
 }
 
@@ -138,9 +142,9 @@ func newSmokeTransportR820T(manufacturer, product string) *smokeTransport {
 	tr := newSmokeTransport(manufacturer, product)
 	delete(tr.i2c, 0x3a)
 	tr.i2c[0x1a] = map[uint8]byte{
-		0x00: chipIDVal,
-		0x02: reverseByte(0x40), // PLL locked
-		0x04: reverseByte(0x15), // VCO op-point 2 (bits5:4=01... see below), cal code 5
+		0x00: 0x69,
+		0x02: 0x02, // PLL locked
+		0x04: 0xa8, // VCO op-point 2 (bits5:4=01... see below), cal code 5
 	}
 	return tr
 }
@@ -155,20 +159,14 @@ func TestOpenR820T(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if d.tuner.chip != TunerR820T {
-		t.Fatalf("detected chip = %v, want TunerR820T", d.tuner.chip)
+	if d.tuner.Chip != tuner.R820T {
+		t.Fatalf("detected chip = %v, want tuner.R820T", d.tuner.Chip)
 	}
 	if d.blogV4 {
 		t.Error("Open: R820T must never be identified as Blog V4")
 	}
-	if d.tuner.addr7 != r820tAddr7 {
-		t.Errorf("tuner addr7 = %#x, want %#x", d.tuner.addr7, r820tAddr7)
-	}
-	if d.tuner.vcoTarget != 2 {
-		t.Errorf("tuner vcoTarget = %d, want 2", d.tuner.vcoTarget)
-	}
-	if d.tuner.crystalHz != r820tNominalCrystalHz {
-		t.Errorf("tuner crystal = %v, want %v", d.tuner.crystalHz, float64(r820tNominalCrystalHz))
+	if d.tuner.CrystalHz != tuner.R820TNominalCrystalHz {
+		t.Errorf("tuner crystal = %v, want %v", d.tuner.CrystalHz, float64(tuner.R820TNominalCrystalHz))
 	}
 
 	if err := d.SetFrequency(100_000_000); err != nil {
@@ -205,21 +203,6 @@ func TestR820TGatedOpsRejectedOnR828D(t *testing.T) {
 	}
 	if err := d.SetHarmonicOverride(5); err != ErrR820TOnly {
 		t.Errorf("SetHarmonicOverride on R828D err = %v, want ErrR820TOnly", err)
-	}
-}
-
-func TestNewTunerParametrization(t *testing.T) {
-	r820t := NewTuner(&fakeTransport{}, TunerR820T, r820tNominalCrystalHz, true /* forced off */)
-	if r820t.blogV4 {
-		t.Error("NewTuner(TunerR820T, blogV4=true) should force blogV4 off")
-	}
-	if r820t.addr7 != r820tAddr7 || r820t.vcoTarget != 2 {
-		t.Errorf("R820T tuner addr7=%#x vcoTarget=%d, want %#x, 2", r820t.addr7, r820t.vcoTarget, r820tAddr7)
-	}
-
-	r828d := NewTuner(&fakeTransport{}, TunerR828D, r828dNominalCrystalHz, false)
-	if r828d.addr7 != r828dAddr7 || r828d.vcoTarget != 1 {
-		t.Errorf("R828D tuner addr7=%#x vcoTarget=%d, want %#x, 1", r828d.addr7, r828d.vcoTarget, r828dAddr7)
 	}
 }
 

@@ -1,12 +1,9 @@
-package r82xx
+package tuner
 
 // RTL-SDR Blog V4 board-specific behavior (RFC §11), layered on top of
 // plain R828D behavior and active only once board identification
 // (§4/§8, manufacturer/product strings "RTLSDRBlog"/"Blog V4") has
 // succeeded.
-
-// blogV4CrystalHz overrides the R828D's usual 16.0MHz default (§11.1).
-const blogV4CrystalHz = 28_800_000
 
 // blogV4FixedVGACode: automatic IF/VGA AGC is never engaged on this
 // board; VGA is pinned at manual code 8 (~16.3dB) regardless of
@@ -19,8 +16,8 @@ const blogV4FixedVGACode = 8
 // 28.8MHz is silently retuned by +28.8MHz. MUST run before IF
 // placement, harmonic selection, and PLL programming.
 func UpconvertHF(requestedHz float64) float64 {
-	if requestedHz < blogV4CrystalHz {
-		return requestedHz + blogV4CrystalHz
+	if requestedHz < BlogV4CrystalHz {
+		return requestedHz + BlogV4CrystalHz
 	}
 	return requestedHz
 }
@@ -43,9 +40,9 @@ func notchEnabled(originalHz float64) bool {
 	return true
 }
 
-// applyNotch overrides register 0x17 bit 3 with the Blog V4 notch
+// ApplyNotch overrides register 0x17 bit 3 with the Blog V4 notch
 // decision, on top of whatever §10.4's band table already wrote there.
-func (tu *Tuner) applyNotch(originalHz float64) error {
+func (tu *Tuner) ApplyNotch(originalHz float64) error {
 	return tu.setField(0x17, 0x08, 3, boolBit(notchEnabled(originalHz)))
 }
 
@@ -70,10 +67,10 @@ func selectInputBand(originalHz float64) inputBand {
 	}
 }
 
-// applyInputSwitch writes the three-way RF input switch (§11.4) only
+// ApplyInputSwitch writes the three-way RF input switch (§11.4) only
 // when the band actually changed, to avoid unnecessary I2C traffic
 // while sweeping frequency within a band.
-func (tu *Tuner) applyInputSwitch(originalHz float64) error {
+func (tu *Tuner) ApplyInputSwitch(originalHz float64) error {
 	band := selectInputBand(originalHz)
 	if int(band) == tu.lastInputBand {
 		return nil

@@ -1,4 +1,6 @@
-package r82xx
+package demod
+
+import "github.com/dim13/r82xx/wire"
 
 // tunerFamilyAGCConstants are empirically-tuned demodulator AGC-loop
 // gain constants matched to the R820T/R828D noise/gain profile (RFC
@@ -30,13 +32,13 @@ var tunerFamilyAGCConstants = []struct {
 	{0, 0x11, 0xe9f4, 2},
 }
 
-// demodApplyR820TR828D applies the R820T/R828D demodulator
-// reconfiguration (RFC §10.11): AGC-loop constants, then the
-// ADC/IF-datapath switch off the power-on zero-IF default onto this
-// tuner family's real 3.57MHz single-ADC-channel operating mode. MUST
-// run unconditionally on every device open, immediately after tuner
-// detection and before the tuner's own power-up sequence.
-func demodApplyR820TR828D(t Transport, crystalHz float64) error {
+// ApplyR820TR828D applies the R820T/R828D demodulator reconfiguration
+// (RFC §10.11): AGC-loop constants, then the ADC/IF-datapath switch
+// off the power-on zero-IF default onto this tuner family's real
+// 3.57MHz single-ADC-channel operating mode. MUST run unconditionally
+// on every device open, immediately after tuner detection and before
+// the tuner's own power-up sequence.
+func ApplyR820TR828D(t wire.Transport, crystalHz float64) error {
 	for _, c := range tunerFamilyAGCConstants {
 		if err := demodWriteReg(t, c.page, c.addr, c.val, c.n); err != nil {
 			return err
@@ -48,7 +50,7 @@ func demodApplyR820TR828D(t Transport, crystalHz float64) error {
 	if err := demodWriteReg(t, 0, 0x08, 0x4d, 1); err != nil { // I-ADC path only
 		return err
 	}
-	if err := setIF(t, defaultIFHz, crystalHz); err != nil {
+	if err := setIF(t, DefaultIFHz, crystalHz); err != nil {
 		return err
 	}
 	return setSpectrumInversion(t, true)

@@ -1,8 +1,17 @@
-package r82xx
+// Package tuner drives the shared R820T/R828D register map and
+// behavior (RFC §10: "except where a difference is called out
+// explicitly, every register, field, and procedure... applies
+// identically to both"), plus the RTL-SDR Blog V4 board-specific
+// behavior layered on top of it (RFC §11).
+package tuner
 
 import (
 	"errors"
 	"math"
+
+	"github.com/dim13/r82xx/demod"
+	"github.com/dim13/r82xx/i2c"
+	"github.com/dim13/r82xx/wire"
 )
 
 // I2C addresses and shared chip-ID check (RFC §10.1, §10.8): R820T
@@ -17,31 +26,33 @@ const (
 	chipIDVal = 0x69
 )
 
-// r820tNominalCrystalHz is Table 17's "typical" R820T reference: the
-// RFC calls this board-dependent rather than a fixed default, so
-// treat it as a starting point, not an authoritative constant.
-const r820tNominalCrystalHz = 28_800_000
+// Nominal reference crystal frequencies (RFC Table 9, Table 17):
+// 16.0MHz plain R828D, 28.8MHz Blog V4 override, and R820T's
+// board-dependent "typical" default, treated as a starting point, not
+// an authoritative constant.
+const (
+	R820TNominalCrystalHz = 28_800_000
+	R828DNominalCrystalHz = 16_000_000
+	BlogV4CrystalHz       = 28_800_000
+)
 
-// Tuner drives the shared R820T/R828D register map and behavior (RFC
-// §10: "except where a difference is called out explicitly, every
-// register, field, and procedure... applies identically to both").
-// Its registers 0x05-0x1F are shadow-cached: field updates
-// read-modify-write the cache and issue one I2C write, without a
-// round-trip read.
+// Tuner drives the shared R820T/R828D register map and behavior. Its
+// registers 0x05-0x1F are shadow-cached: field updates read-modify-write
+// the cache and issue one I2C write, without a round-trip read.
 type Tuner struct {
-	t         Transport
-	chip      TunerType // TunerR820T or TunerR828D
+	t         wire.Transport
+	Chip      Type // R820T or R828D
 	addr7     uint8
 	vcoTarget byte // fine-VCO-trim target and PLL whole_part-bound divisor: 1 (R828D) or 2 (R820T), §10.3
-	crystalHz float64
+	CrystalHz float64
 	blogV4    bool
 
 	regs      [32]byte
 	overrides map[uint8]regOverride
 
-	sidebandUpper     bool
+	SidebandUpper     bool
 	ifCenterHz        float64
-	ifBandOffsetHz    float64
+	IFBandOffsetHz    float64
 	lastInputBand     int  // -1 = unset; Blog V4 3-way switch cache, §11.4
 	ditheringDisabled bool // R820T-only manual override, §9 "Set PLL dithering enable"
 }
@@ -51,26 +62,24 @@ type regOverride struct {
 	val  byte
 }
 
-// NewTuner constructs a Tuner for the given detected chip, bound to
-// the given I2C transport and reference crystal (16.0MHz plain R828D,
-// 28.8MHz Blog V4, or board-dependent for R820T -- RFC §10.3 Table 9,
-// §10.8 Table 17). It performs no I2C traffic; call PowerUp to bring
-// the chip up. blogV4 is forced false for chip == TunerR820T: Blog V4
-// boards only ever carry an R828D (RFC §8).
-func NewTuner(t Transport, chip TunerType, crystalHz float64, blogV4 bool) *Tuner {
+// New constructs a Tuner for the given detected chip, bound to the
+// given I2C transport and reference crystal. It performs no I2C
+// traffic; call PowerUp to bring the chip up. blogV4 is forced false
+// for chip == R820T: Blog V4 boards only ever carry an R828D (RFC §8).
+func New(t wire.Transport, chip Type, crystalHz float64, blogV4 bool) *Tuner {
 	addr7, vcoTarget := uint8(r828dAddr7), byte(1)
-	if chip == TunerR820T {
+	if chip == R820T {
 		addr7, vcoTarget, blogV4 = r820tAddr7, 2, false
 	}
 	return &Tuner{
 		t:             t,
-		chip:          chip,
+		Chip:          chip,
 		addr7:         addr7,
 		vcoTarget:     vcoTarget,
-		crystalHz:     crystalHz,
+		CrystalHz:     crystalHz,
 		blogV4:        blogV4,
 		overrides:     make(map[uint8]regOverride),
-		ifCenterHz:    defaultIFHz,
+		ifCenterHz:    demod.DefaultIFHz,
 		lastInputBand: -1,
 	}
 }
@@ -96,7 +105,7 @@ func reverseByte(b byte) byte {
 // something depending on it — PLL lock detection, VCO fine-trim —
 // never sees the right bit.
 func (tu *Tuner) readStatus(reg uint8) (byte, error) {
-	b, err := i2cRead(tu.t, tu.addr7, 0, int(reg)+1)
+	b, err := i2c.Read(tu.t, tu.addr7, 0, int(reg)+1)
 	if err != nil {
 		return 0, err
 	}
@@ -112,7 +121,7 @@ func (tu *Tuner) writeReg(reg uint8, val byte) error {
 		val = val&^ov.mask | ov.val&ov.mask
 	}
 	tu.regs[reg] = val
-	return i2cWrite(tu.t, tu.addr7, reg, []byte{val})
+	return i2c.Write(tu.t, tu.addr7, reg, []byte{val})
 }
 
 func (tu *Tuner) setField(reg uint8, mask byte, shift uint, val byte) error {
@@ -221,7 +230,7 @@ func (tu *Tuner) LO(loHz float64) error {
 		}
 	}
 
-	refHz := tu.crystalHz
+	refHz := tu.CrystalHz
 	if tu.regs[0x10]&0x10 != 0 { // RF2: reference divide-by-2
 		refHz /= 2
 	}
@@ -341,18 +350,18 @@ var rfBandTable = []bandRow{
 	{650, false, true, 0, 0x00},
 }
 
-// loTargets computes the target LO frequency (for RF-band-table
+// LOTargets computes the target LO frequency (for RF-band-table
 // lookup) and the value to actually program into the synthesizer for
 // the given harmonic order (RFC §10.3 steps 2-4). Harmonic mixing
 // flips sideband selection for orders 3, 7, 11, 15 (order mod 4 == 3).
-func (tu *Tuner) loTargets(effRFHz float64, order int) (desiredLOHz, programHz float64) {
+func (tu *Tuner) LOTargets(effRFHz float64, order int) (desiredLOHz, programHz float64) {
 	flip := order%4 == 3
-	subtract := tu.sidebandUpper != flip
+	subtract := tu.SidebandUpper != flip
 	sign := 1.0
 	if subtract {
 		sign = -1
 	}
-	desiredLOHz = effRFHz + sign*tu.ifCenterHz + tu.ifBandOffsetHz
+	desiredLOHz = effRFHz + sign*tu.ifCenterHz + tu.IFBandOffsetHz
 	programHz = desiredLOHz
 	if order > 1 {
 		programHz = desiredLOHz / float64(order)
@@ -372,14 +381,14 @@ func lookupBand(loHz float64) bandRow {
 	return row
 }
 
-// applyBand writes the RF front-end band-table row for the given LO
+// ApplyBand writes the RF front-end band-table row for the given LO
 // frequency (RFC §10.4). It only touches the tracking-filter/RF-band
 // bits of 0x1A (AGC/PLL clock-rate bits are left as LO() set them),
 // the corner byte 0x1B, the crystal-cap field of 0x10 (hardcoded
 // 0x00), and the baseline open-drain/notch bit of 0x17 -- which Blog
 // V4 boards additionally override per original (pre-upconversion)
 // frequency, RFC §11.3.
-func (tu *Tuner) applyBand(loHz float64) error {
+func (tu *Tuner) ApplyBand(loHz float64) error {
 	row := lookupBand(loHz)
 	mode := byte(0)
 	if row.trackBypass {

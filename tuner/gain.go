@@ -1,4 +1,4 @@
-package r82xx
+package tuner
 
 // Gain control (RFC §10.6): three independently switchable stages
 // (LNA, mixer, IF/VGA), each automatic (chip AGC) or manual.

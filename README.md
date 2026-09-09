@@ -12,17 +12,22 @@ fitted to the RTL-SDR Blog V4.
   3-way RF input switching, fixed VGA gain.
 
 Other tuner families (E4000, FC0012/FC0013, FC2580) are detected but
-not driven — `Open` returns `ErrUnsupportedTuner` for them.
+not driven — `Open` returns `tuner.ErrUnsupported` for them.
 
 This package has no USB backend of its own. Callers supply one by
-implementing `Transport` (control transfers, bulk reads, USB string
-descriptors) — wrap [`google/gousb`](https://github.com/google/gousb)
+implementing `wire.Transport` (control transfers, bulk reads, USB
+string descriptors) — wrap [`google/gousb`](https://github.com/google/gousb)
 or any other libusb binding.
 
 ## Usage
 
 ```go
-var t r82xx.Transport = myUSBTransport{} // your Transport implementation
+import (
+    "github.com/dim13/r82xx"
+    "github.com/dim13/r82xx/wire"
+)
+
+var t wire.Transport = myUSBTransport{} // your Transport implementation
 
 dev, err := r82xx.Open(t)
 if err != nil {
@@ -36,7 +41,7 @@ if _, err := dev.SetSampleRate(2_400_000); err != nil {
 if err := dev.SetFrequency(100_000_000); err != nil {
     log.Fatal(err)
 }
-if err := dev.SetGain(200); err != nil { // tenths of dB, see r82xx.GainSteps
+if err := dev.SetGain(200); err != nil { // tenths of dB, see tuner.GainSteps
     log.Fatal(err)
 }
 

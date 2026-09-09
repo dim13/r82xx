@@ -1,23 +1,29 @@
+// Package r82xx implements the RTL2832U + R828D USB SDR receiver as
+// fitted to the RTL-SDR Blog V4, derived from docs/hardware-spec-rfc.txt.
 package r82xx
 
 import (
 	"errors"
 	"sync"
+
+	"github.com/dim13/r82xx/demod"
+	"github.com/dim13/r82xx/tuner"
+	"github.com/dim13/r82xx/wire"
 )
 
-// r828dNominalCrystalHz is the R828D's usual default reference; Blog
-// V4 boards override it to 28.8MHz (RFC Table 9). R820T has no such
-// fixed default (Table 17: "28.8MHz, board-dependent") -- see
-// r820tNominalCrystalHz.
-const r828dNominalCrystalHz = 16_000_000
+// USB device identity (RFC §4).
+const (
+	VendorID  = 0x0bda
+	ProductID = 0x2838
+)
 
 // Device is an opened RTL2832U + R820T/R828D receiver (RFC §14
 // walkthrough).
 type Device struct {
-	t  Transport
+	t  wire.Transport
 	mu sync.Mutex
 
-	tuner  *Tuner
+	tuner  *tuner.Tuner
 	blogV4 bool
 
 	demodCrystalHz float64 // nominal, PPM-corrected
@@ -32,10 +38,10 @@ type Device struct {
 // baseband bring-up, tuner detection, and demodulator reconfiguration
 // and tuner power-up for whichever of the R820T/R828D family answered
 // -- this package's only implemented tuner family (RFC §1 scope: the
-// other candidates detectTuner() also probes are out of scope past
+// other candidates tuner.Detect() also probes are out of scope past
 // detection).
-func Open(t Transport) (*Device, error) {
-	if err := basebandInit(t); err != nil {
+func Open(t wire.Transport) (*Device, error) {
+	if err := demod.BasebandInit(t); err != nil {
 		return nil, err
 	}
 	manufacturer, product, err := t.Strings()
@@ -43,50 +49,50 @@ func Open(t Transport) (*Device, error) {
 		return nil, err
 	}
 
-	var typ TunerType
+	var typ tuner.Type
 	err = withRepeaterKeepOpen(t, func() error {
-		typ, err = detectTuner(t)
+		typ, err = tuner.Detect(t)
 		return err
 	})
 	if err != nil {
-		repeaterDisable(t)
+		demod.RepeaterDisable(t)
 		return nil, err
 	}
-	if typ != TunerR828D && typ != TunerR820T {
-		repeaterDisable(t)
-		if typ == TunerNone {
+	if typ != tuner.R828D && typ != tuner.R820T {
+		demod.RepeaterDisable(t)
+		if typ == tuner.None {
 			return nil, errors.New("r82xx: no tuner responded")
 		}
-		return nil, ErrUnsupportedTuner
+		return nil, tuner.ErrUnsupported
 	}
 
-	blogV4 := typ == TunerR828D && manufacturer == "RTLSDRBlog" && product == "Blog V4"
-	crystalHz := float64(r820tNominalCrystalHz)
-	if typ == TunerR828D {
-		crystalHz = r828dNominalCrystalHz
+	blogV4 := typ == tuner.R828D && manufacturer == "RTLSDRBlog" && product == "Blog V4"
+	crystalHz := float64(tuner.R820TNominalCrystalHz)
+	if typ == tuner.R828D {
+		crystalHz = tuner.R828DNominalCrystalHz
 		if blogV4 {
-			crystalHz = blogV4CrystalHz
+			crystalHz = tuner.BlogV4CrystalHz
 		}
 	}
 
-	if err := demodApplyR820TR828D(t, crystalHz); err != nil {
-		repeaterDisable(t)
+	if err := demod.ApplyR820TR828D(t, crystalHz); err != nil {
+		demod.RepeaterDisable(t)
 		return nil, err
 	}
-	tuner := NewTuner(t, typ, crystalHz, blogV4)
-	if err := tuner.PowerUp(); err != nil {
-		repeaterDisable(t)
+	tu := tuner.New(t, typ, crystalHz, blogV4)
+	if err := tu.PowerUp(); err != nil {
+		demod.RepeaterDisable(t)
 		return nil, err
 	}
-	if err := repeaterDisable(t); err != nil {
+	if err := demod.RepeaterDisable(t); err != nil {
 		return nil, err
 	}
 
 	return &Device{
 		t:              t,
-		tuner:          tuner,
+		tuner:          tu,
 		blogV4:         blogV4,
-		demodCrystalHz: nominalCrystalHz,
+		demodCrystalHz: demod.NominalCrystalHz,
 	}, nil
 }
 
@@ -94,8 +100,8 @@ func Open(t Transport) (*Device, error) {
 // repeater enabled on success so Open's subsequent steps (which run
 // "with the repeater still enabled", RFC §6 steps 6-8) don't need to
 // re-enable it. The caller is responsible for eventually disabling it.
-func withRepeaterKeepOpen(t Transport, fn func() error) error {
-	if err := repeaterEnable(t); err != nil {
+func withRepeaterKeepOpen(t wire.Transport, fn func() error) error {
+	if err := demod.RepeaterEnable(t); err != nil {
 		return err
 	}
 	return fn()
@@ -107,8 +113,8 @@ func withRepeaterKeepOpen(t Transport, fn func() error) error {
 func (d *Device) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	err := withRepeater(d.t, d.tuner.Standby)
-	if perr := demodPowerDown(d.t); err == nil {
+	err := demod.WithRepeater(d.t, d.tuner.Standby)
+	if perr := demod.PowerDown(d.t); err == nil {
 		err = perr
 	}
 	return err
@@ -119,7 +125,7 @@ func (d *Device) Close() error {
 func (d *Device) SetSampleRate(hz uint32) (achievedHz float64, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return setSampleRate(d.t, d.demodCrystalHz, d.ppm, hz)
+	return demod.SetSampleRate(d.t, d.demodCrystalHz, d.ppm, hz)
 }
 
 // SetPPM applies frequency-correction PPM to both the demodulator and
@@ -130,15 +136,15 @@ func (d *Device) SetPPM(ppm float64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.ppm = ppm
-	nominalTuner := float64(r820tNominalCrystalHz)
-	if d.tuner.chip == TunerR828D {
-		nominalTuner = r828dNominalCrystalHz
+	nominalTuner := float64(tuner.R820TNominalCrystalHz)
+	if d.tuner.Chip == tuner.R828D {
+		nominalTuner = tuner.R828DNominalCrystalHz
 		if d.blogV4 {
-			nominalTuner = blogV4CrystalHz
+			nominalTuner = tuner.BlogV4CrystalHz
 		}
 	}
-	d.tuner.crystalHz = correctedHz(nominalTuner, ppm)
-	return setPPM(d.t, ppm)
+	d.tuner.CrystalHz = demod.CorrectedHz(nominalTuner, ppm)
+	return demod.SetPPM(d.t, ppm)
 }
 
 // SetFrequency tunes to requestedHz (RFC §14.3 Phase C): applies Blog
@@ -149,7 +155,7 @@ func (d *Device) SetPPM(ppm float64) error {
 func (d *Device) SetFrequency(requestedHz float64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	err := withRepeater(d.t, func() error { return d.tuneLocked(requestedHz) })
+	err := demod.WithRepeater(d.t, func() error { return d.tuneLocked(requestedHz) })
 	if err == nil {
 		d.lastFrequencyHz = requestedHz
 		d.haveFrequency = true
@@ -160,7 +166,7 @@ func (d *Device) SetFrequency(requestedHz float64) error {
 func (d *Device) tuneLocked(requestedHz float64) error {
 	eff := requestedHz
 	if d.blogV4 {
-		eff = UpconvertHF(requestedHz)
+		eff = tuner.UpconvertHF(requestedHz)
 	}
 
 	manual := d.harmonicOverride != nil
@@ -171,9 +177,9 @@ func (d *Device) tuneLocked(requestedHz float64) error {
 	case eff > 1_770_000_000:
 		order = 5
 	}
-	desiredLO, program := d.tuner.loTargets(eff, order)
+	desiredLO, program := d.tuner.LOTargets(eff, order)
 
-	if err := d.tuner.applyBand(desiredLO); err != nil {
+	if err := d.tuner.ApplyBand(desiredLO); err != nil {
 		return err
 	}
 	if err := d.tuner.LO(program); err != nil {
@@ -185,8 +191,8 @@ func (d *Device) tuneLocked(requestedHz float64) error {
 	}
 	if !locked && !manual && order == 1 && desiredLO > 1_760_000_000 {
 		order = 5
-		desiredLO, program = d.tuner.loTargets(eff, order)
-		if err := d.tuner.applyBand(desiredLO); err != nil {
+		desiredLO, program = d.tuner.LOTargets(eff, order)
+		if err := d.tuner.ApplyBand(desiredLO); err != nil {
 			return err
 		}
 		if err := d.tuner.LO(program); err != nil {
@@ -195,12 +201,12 @@ func (d *Device) tuneLocked(requestedHz float64) error {
 	}
 
 	if d.blogV4 {
-		if err := d.tuner.applyNotch(requestedHz); err != nil {
+		if err := d.tuner.ApplyNotch(requestedHz); err != nil {
 			return err
 		}
-		return d.tuner.applyInputSwitch(requestedHz)
+		return d.tuner.ApplyInputSwitch(requestedHz)
 	}
-	return d.tuner.applyPlainInputSwitch(requestedHz)
+	return d.tuner.ApplyPlainInputSwitch(requestedHz)
 }
 
 // SetSideband selects upper/lower sideband for the tuner's IF
@@ -209,11 +215,11 @@ func (d *Device) tuneLocked(requestedHz float64) error {
 func (d *Device) SetSideband(upper bool) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.tuner.sidebandUpper = upper
+	d.tuner.SidebandUpper = upper
 	if !d.haveFrequency {
 		return nil
 	}
-	return withRepeater(d.t, func() error { return d.tuneLocked(d.lastFrequencyHz) })
+	return demod.WithRepeater(d.t, func() error { return d.tuneLocked(d.lastFrequencyHz) })
 }
 
 // SetIFPassbandOffset shifts the tuner's IF filter center relative to
@@ -221,11 +227,11 @@ func (d *Device) SetSideband(upper bool) error {
 func (d *Device) SetIFPassbandOffset(hz float64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.tuner.ifBandOffsetHz = hz
+	d.tuner.IFBandOffsetHz = hz
 	if !d.haveFrequency {
 		return nil
 	}
-	return withRepeater(d.t, func() error { return d.tuneLocked(d.lastFrequencyHz) })
+	return demod.WithRepeater(d.t, func() error { return d.tuneLocked(d.lastFrequencyHz) })
 }
 
 // SetBandwidth applies a channel-filter bandwidth request; 0 falls
@@ -238,7 +244,7 @@ func (d *Device) SetBandwidth(hz float64, currentSampleRateHz float64) error {
 	if hz == 0 {
 		hz = currentSampleRateHz
 	}
-	err := withRepeater(d.t, func() error {
+	err := demod.WithRepeater(d.t, func() error {
 		if _, err := d.tuner.SetBandwidth(hz); err != nil {
 			return err
 		}
@@ -255,7 +261,7 @@ func (d *Device) SetBandwidth(hz float64, currentSampleRateHz float64) error {
 func (d *Device) SetGain(tenthsDB int) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return withRepeater(d.t, func() error { return d.tuner.SetGain(tenthsDB) })
+	return demod.WithRepeater(d.t, func() error { return d.tuner.SetGain(tenthsDB) })
 }
 
 // ErrR828DOnly is returned by ops RFC §9 Table 7 labels R828D-specific
@@ -267,10 +273,10 @@ var ErrR828DOnly = errors.New("r82xx: operation restricted to R828D tuners (RFC 
 func (d *Device) SetExtendedGain(lna, mixer, vga int) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.tuner.chip != TunerR828D {
+	if d.tuner.Chip != tuner.R828D {
 		return ErrR828DOnly
 	}
-	return withRepeater(d.t, func() error { return d.tuner.SetExtendedGain(lna, mixer, vga) })
+	return demod.WithRepeater(d.t, func() error { return d.tuner.SetExtendedGain(lna, mixer, vga) })
 }
 
 // SetIFMode applies the IF-gain host-API range encoding (RFC §9 "Set
@@ -278,10 +284,10 @@ func (d *Device) SetExtendedGain(lna, mixer, vga int) error {
 func (d *Device) SetIFMode(value int) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.tuner.chip != TunerR828D {
+	if d.tuner.Chip != tuner.R828D {
 		return ErrR828DOnly
 	}
-	return withRepeater(d.t, func() error { return d.tuner.SetIFMode(value) })
+	return demod.WithRepeater(d.t, func() error { return d.tuner.SetIFMode(value) })
 }
 
 // SetIFGain sets the VGA gain code directly (RFC §9 "Set IF gain
@@ -289,7 +295,7 @@ func (d *Device) SetIFMode(value int) error {
 func (d *Device) SetIFGain(code int) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return withRepeater(d.t, func() error { return d.tuner.SetVGAGain(code) })
+	return demod.WithRepeater(d.t, func() error { return d.tuner.SetVGAGain(code) })
 }
 
 // SetGainAuto and SetGainManual toggle hardware-AGC vs. manual gain
@@ -297,13 +303,13 @@ func (d *Device) SetIFGain(code int) error {
 func (d *Device) SetGainAuto() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return withRepeater(d.t, d.tuner.SetGainAuto)
+	return demod.WithRepeater(d.t, d.tuner.SetGainAuto)
 }
 
 func (d *Device) SetGainManual() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return withRepeater(d.t, d.tuner.SetGainManual)
+	return demod.WithRepeater(d.t, d.tuner.SetGainManual)
 }
 
 // Gain reads back the currently applied composite gain as mixer/LNA
@@ -311,7 +317,7 @@ func (d *Device) SetGainManual() error {
 func (d *Device) Gain() (mixer, lna int, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	err = withRepeater(d.t, func() error {
+	err = demod.WithRepeater(d.t, func() error {
 		var e error
 		mixer, lna, e = d.tuner.GainReadback()
 		return e
@@ -325,7 +331,7 @@ func (d *Device) PLLLocked() (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var locked bool
-	err := withRepeater(d.t, func() error {
+	err := demod.WithRepeater(d.t, func() error {
 		var e error
 		locked, e = d.tuner.Locked()
 		return e
@@ -341,7 +347,7 @@ func (d *Device) RawRegister(reg, mask, val byte, write bool) (byte, error) {
 	if !write {
 		return d.tuner.RawRead(reg, mask), nil
 	}
-	return 0, withRepeater(d.t, func() error { return d.tuner.RawWrite(reg, mask, val) })
+	return 0, demod.WithRepeater(d.t, func() error { return d.tuner.RawWrite(reg, mask, val) })
 }
 
 // OverrideRegister pins mask bits of a tuner register to val across
@@ -349,7 +355,7 @@ func (d *Device) RawRegister(reg, mask, val byte, write bool) (byte, error) {
 func (d *Device) OverrideRegister(reg, mask, val byte) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return withRepeater(d.t, func() error { return d.tuner.Override(reg, mask, val) })
+	return demod.WithRepeater(d.t, func() error { return d.tuner.Override(reg, mask, val) })
 }
 
 // ClearOverrideRegister removes a pinned override.
@@ -377,10 +383,10 @@ func (d *Device) SetDitheringDisabled() error {
 func (d *Device) setDithering(fn func() error) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.tuner.chip != TunerR820T {
+	if d.tuner.Chip != tuner.R820T {
 		return ErrR820TOnly
 	}
-	return withRepeater(d.t, fn)
+	return demod.WithRepeater(d.t, fn)
 }
 
 // SetHarmonicOverride manually forces the harmonic-mixing index (RFC
@@ -392,7 +398,7 @@ func (d *Device) setDithering(fn func() error) error {
 func (d *Device) SetHarmonicOverride(order int) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.tuner.chip != TunerR820T {
+	if d.tuner.Chip != tuner.R820T {
 		return ErrR820TOnly
 	}
 	if order < 0 {
@@ -403,5 +409,5 @@ func (d *Device) SetHarmonicOverride(order int) error {
 	if !d.haveFrequency {
 		return nil
 	}
-	return withRepeater(d.t, func() error { return d.tuneLocked(d.lastFrequencyHz) })
+	return demod.WithRepeater(d.t, func() error { return d.tuneLocked(d.lastFrequencyHz) })
 }

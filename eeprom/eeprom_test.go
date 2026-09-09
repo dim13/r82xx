@@ -1,11 +1,11 @@
-package r82xx
+package eeprom
 
 import "testing"
 
 func TestLayoutRoundTrip(t *testing.T) {
 	want := Layout{
-		VendorID:     VendorID,
-		ProductID:    ProductID,
+		VendorID:     0x0bda, // r82xx.VendorID
+		ProductID:    0x2838, // r82xx.ProductID
 		SerialEnable: true,
 		RemoteWakeup: true,
 		Manufacturer: "RTLSDRBlog",
@@ -39,7 +39,7 @@ func TestEncodeLayoutTruncation(t *testing.T) {
 	long := Layout{
 		Manufacturer: "this manufacturer string is deliberately far too long to fit",
 	}
-	if _, err := EncodeLayout(long); err != ErrEEPROMTruncated {
-		t.Errorf("EncodeLayout(long) err = %v, want ErrEEPROMTruncated", err)
+	if _, err := EncodeLayout(long); err != ErrTruncated {
+		t.Errorf("EncodeLayout(long) err = %v, want ErrTruncated", err)
 	}
 }

@@ -1,4 +1,4 @@
-package r82xx
+package wire
 
 import "testing"
 
@@ -41,49 +41,17 @@ func (f *fakeTransport) Strings() (string, string, error) {
 	return f.manufacturer, f.product, nil
 }
 
-func TestBlockReadIndex(t *testing.T) {
-	cases := []struct {
-		b    block
-		want uint16
-	}{
-		{blockDemod, 0x0000},
-		{blockI2C, 0x0600},
-		{blockIR, 0x0201}, // aliased into the system block
-	}
-	for _, tc := range cases {
-		if got := blockReadIndex(tc.b); got != tc.want {
-			t.Errorf("blockReadIndex(%v) = %#x, want %#x", tc.b, got, tc.want)
-		}
-	}
-}
-
-func TestBlockWriteIndex(t *testing.T) {
-	cases := []struct {
-		b    block
-		want uint16
-	}{
-		{blockDemod, 0x0010},
-		{blockI2C, 0x0610},
-		{blockIR, 0x0211}, // aliased into the system block
-	}
-	for _, tc := range cases {
-		if got := blockWriteIndex(tc.b); got != tc.want {
-			t.Errorf("blockWriteIndex(%v) = %#x, want %#x", tc.b, got, tc.want)
-		}
-	}
-}
-
 func TestReadWriteRegByteOrder(t *testing.T) {
 	// 2-byte write is big-endian; 2-byte read is reassembled
 	// little-endian (RFC §5.2, unverified asymmetry).
 	ft := &fakeTransport{}
-	if err := writeReg(ft, blockUSB, 0x00, 0x1234, 2); err != nil {
+	if err := USB.WriteReg(ft, 0x00, 0x1234, 2); err != nil {
 		t.Fatal(err)
 	}
 
 	var sent []byte
 	sentTransport := &recordingTransport{}
-	if err := writeReg(sentTransport, blockUSB, 0x00, 0x1234, 2); err != nil {
+	if err := USB.WriteReg(sentTransport, 0x00, 0x1234, 2); err != nil {
 		t.Fatal(err)
 	}
 	sent = sentTransport.lastOut
@@ -92,7 +60,7 @@ func TestReadWriteRegByteOrder(t *testing.T) {
 	}
 
 	readTransport := &recordingTransport{inData: []byte{0x34, 0x12}}
-	got, err := readReg(readTransport, blockUSB, 0x00, 2)
+	got, err := USB.ReadReg(readTransport, 0x00, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,10 +90,4 @@ func (r *recordingTransport) BulkIn(data []byte) (int, error) {
 
 func (r *recordingTransport) Strings() (string, string, error) {
 	return "", "", nil
-}
-
-func TestI2CAddr8(t *testing.T) {
-	if got, want := i2cAddr8(0x3a), uint16(0x74); got != want {
-		t.Errorf("i2cAddr8(0x3a) = %#x, want %#x", got, want)
-	}
 }

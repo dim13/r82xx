@@ -1,4 +1,6 @@
-package r82xx
+package demod
+
+import "github.com/dim13/r82xx/wire"
 
 // DirectSamplingMode selects which ADC input direct sampling reads
 // from, bypassing the tuner's IF output entirely (RFC §7.7).
@@ -10,11 +12,11 @@ const (
 	DirectSamplingQ                      // Q-ADC direct
 )
 
-// enableDirectSampling runs steps 2-5 of the enable sequence; shutting
+// EnableDirectSampling runs steps 2-5 of the enable sequence; shutting
 // down an attached tuner (step 1) and re-applying the tuned frequency
 // (step 6) are the caller's (Device's) responsibility, since they
 // cross into tuner/frequency-bookkeeping territory.
-func enableDirectSampling(t Transport, mode DirectSamplingMode) error {
+func EnableDirectSampling(t wire.Transport, mode DirectSamplingMode) error {
 	if err := demodWriteReg(t, 1, 0xb1, 0x1a, 1); err != nil { // zero-IF off
 		return err
 	}
@@ -31,12 +33,12 @@ func enableDirectSampling(t Transport, mode DirectSamplingMode) error {
 	return demodWriteReg(t, 0, 0x06, route, 1)
 }
 
-// disableDirectSamplingR828D runs the R820T/R828D-family branch of the
+// DisableDirectSamplingR828D runs the R820T/R828D-family branch of the
 // disable sequence (steps 2 and 4); re-running the tuner's power-up
 // sequence (step 1) and re-applying the tuned frequency (step 5) are
 // the caller's responsibility.
-func disableDirectSamplingR828D(t Transport, crystalHz float64) error {
-	if err := setIF(t, defaultIFHz, crystalHz); err != nil {
+func DisableDirectSamplingR828D(t wire.Transport, crystalHz float64) error {
+	if err := setIF(t, DefaultIFHz, crystalHz); err != nil {
 		return err
 	}
 	if err := setSpectrumInversion(t, true); err != nil {
@@ -45,8 +47,8 @@ func disableDirectSamplingR828D(t Transport, crystalHz float64) error {
 	return demodWriteReg(t, 0, 0x06, 0x80, 1)
 }
 
-// disableDirectSamplingOther runs the non-R820T/R828D-family branch.
-func disableDirectSamplingOther(t Transport, crystalHz float64) error {
+// DisableDirectSamplingOther runs the non-R820T/R828D-family branch.
+func DisableDirectSamplingOther(t wire.Transport, crystalHz float64) error {
 	if err := setIF(t, 0, crystalHz); err != nil {
 		return err
 	}
@@ -59,9 +61,10 @@ func disableDirectSamplingOther(t Transport, crystalHz float64) error {
 	return demodWriteReg(t, 0, 0x06, 0x80, 1)
 }
 
-// Offset tuning (RFC §7.8, 85% of the Nyquist half-rate) is rejected
-// outright for the R820T/R828D path and never called by Device; kept
-// only for completeness against the wider device family.
-func offsetHz(sampleRateHz float64) float64 {
+// OffsetHz computes offset tuning (RFC §7.8, 85% of the Nyquist
+// half-rate); rejected outright for the R820T/R828D path and never
+// called by Device, kept only for completeness against the wider
+// device family.
+func OffsetHz(sampleRateHz float64) float64 {
 	return (sampleRateHz / 2) * 1.7
 }

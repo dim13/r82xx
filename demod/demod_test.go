@@ -1,6 +1,41 @@
-package r82xx
+package demod
 
 import "testing"
+
+type demodWrite struct {
+	page, addr uint8
+	val        byte
+}
+
+// fakeTransport is a minimal in-memory Transport for table-driven
+// tests: it always succeeds, echoes zero bytes on read, and records
+// every demodulator paged-register write for assertions.
+type fakeTransport struct {
+	demodWrites []demodWrite
+}
+
+func (f *fakeTransport) ControlIn(wValue, wIndex uint16, data []byte) (int, error) {
+	return len(data), nil
+}
+
+func (f *fakeTransport) ControlOut(wValue, wIndex uint16, data []byte) error {
+	if wValue&0xff == 0x20 && wIndex&0x10 != 0 && len(data) == 1 {
+		f.demodWrites = append(f.demodWrites, demodWrite{
+			page: uint8(wIndex & 0x0f),
+			addr: uint8(wValue >> 8),
+			val:  data[0],
+		})
+	}
+	return nil
+}
+
+func (f *fakeTransport) BulkIn(data []byte) (int, error) {
+	return len(data), nil
+}
+
+func (f *fakeTransport) Strings() (string, string, error) {
+	return "", "", nil
+}
 
 func TestIFRegValue(t *testing.T) {
 	if got, want := ifRegValue(0, 28_800_000), int32(0); got != want {

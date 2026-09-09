@@ -1,4 +1,6 @@
-package r82xx
+package tuner
+
+import "github.com/dim13/r82xx/demod"
 
 // Standby / power-down sequence (RFC §10.9), triggered on device
 // close only if the tuner had been initialized.
@@ -56,7 +58,7 @@ func (tu *Tuner) PowerUp() error {
 			return err
 		}
 	}
-	tu.ifCenterHz = defaultIFHz
+	tu.ifCenterHz = demod.DefaultIFHz
 	tu.lastInputBand = -1
 
 	if err := tu.LO(56_000_000); err != nil {

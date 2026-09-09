@@ -45,13 +45,13 @@ func TestReadWriteRegByteOrder(t *testing.T) {
 	// 2-byte write is big-endian; 2-byte read is reassembled
 	// little-endian (RFC §5.2, unverified asymmetry).
 	ft := &fakeTransport{}
-	if err := USB.WriteReg(ft, 0x00, 0x1234, 2); err != nil {
+	if err := BlockUSB.WriteReg(ft, 0x00, 0x1234, 2); err != nil {
 		t.Fatal(err)
 	}
 
 	var sent []byte
 	sentTransport := &recordingTransport{}
-	if err := USB.WriteReg(sentTransport, 0x00, 0x1234, 2); err != nil {
+	if err := BlockUSB.WriteReg(sentTransport, 0x00, 0x1234, 2); err != nil {
 		t.Fatal(err)
 	}
 	sent = sentTransport.lastOut
@@ -60,7 +60,7 @@ func TestReadWriteRegByteOrder(t *testing.T) {
 	}
 
 	readTransport := &recordingTransport{inData: []byte{0x34, 0x12}}
-	got, err := USB.ReadReg(readTransport, 0x00, 2)
+	got, err := BlockUSB.ReadReg(readTransport, 0x00, 2)
 	if err != nil {
 		t.Fatal(err)
 	}

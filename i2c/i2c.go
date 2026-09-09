@@ -15,7 +15,7 @@ func Write(t wire.Transport, addr7, reg uint8, data []byte) error {
 	buf := make([]byte, 1+len(data))
 	buf[0] = reg
 	copy(buf[1:], data)
-	return wire.I2C.Write(t, addr8(addr7), buf)
+	return wire.BlockI2C.Write(t, addr8(addr7), buf)
 }
 
 // Read performs a register read as two back-to-back USB transactions:
@@ -24,11 +24,11 @@ func Write(t wire.Transport, addr7, reg uint8, data []byte) error {
 // I2C repeated start; the bridge holds the bus between the two
 // transactions.
 func Read(t wire.Transport, addr7, reg uint8, n int) ([]byte, error) {
-	if err := wire.I2C.Write(t, addr8(addr7), []byte{reg}); err != nil {
+	if err := wire.BlockI2C.Write(t, addr8(addr7), []byte{reg}); err != nil {
 		return nil, err
 	}
 	buf := make([]byte, n)
-	if err := wire.I2C.Read(t, addr8(addr7), buf); err != nil {
+	if err := wire.BlockI2C.Read(t, addr8(addr7), buf); err != nil {
 		return nil, err
 	}
 	return buf, nil

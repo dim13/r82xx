@@ -6,28 +6,28 @@ package wire
 type Block uint16
 
 const (
-	blockDemod Block = 0 // demodulator, legacy flat access; superseded by demod's paged scheme
-	USB        Block = 1 // USB core
-	Sys        Block = 2 // system / GPIO
-	blockTuner Block = 3 // tuner; unused directly, I2C block used instead
-	blockROM   Block = 4 // EEPROM
-	blockIR    Block = 5 // infrared; aliased into the system block's address space
-	I2C        Block = 6 // I2C bus
+	BlockDemod Block = 0 // demodulator, legacy flat access; superseded by demod's paged scheme
+	BlockUSB   Block = 1 // USB core
+	BlockSys   Block = 2 // system / GPIO
+	BlockTuner Block = 3 // tuner; unused directly, I2C block used instead
+	BlockROM   Block = 4 // EEPROM
+	BlockIR    Block = 5 // infrared; aliased into the system block's address space
+	BlockI2C   Block = 6 // I2C bus
 )
 
 // readIndex and writeIndex return the wIndex for a generic block
 // access. The infrared block is not addressed directly: it is wired
 // up as a sub-page of the system block (RFC §5.2).
 func (b Block) readIndex() uint16 {
-	if b == blockIR {
-		return uint16(Sys)<<8 | 0x01
+	if b == BlockIR {
+		return uint16(BlockSys)<<8 | 0x01
 	}
 	return uint16(b) << 8
 }
 
 func (b Block) writeIndex() uint16 {
-	if b == blockIR {
-		return uint16(Sys)<<8 | 0x11
+	if b == BlockIR {
+		return uint16(BlockSys)<<8 | 0x11
 	}
 	return uint16(b)<<8 | 0x10
 }

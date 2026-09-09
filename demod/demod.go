@@ -52,19 +52,19 @@ func BasebandInit(t wire.Transport) error {
 		val  uint16
 		n    int
 	}{
-		{wire.Sys, 0x00, 0x09, 1}, // liveness / system-control
-		{wire.USB, 0x00, 0x0002, 2},
-		{wire.USB, 0x00, 0x1002, 2},
+		{wire.BlockSys, 0x00, 0x09, 1}, // liveness / system-control
+		{wire.BlockUSB, 0x00, 0x0002, 2},
+		{wire.BlockUSB, 0x00, 0x1002, 2},
 	}
 	for _, s := range steps {
 		if err := s.blk.WriteReg(t, s.addr, s.val, s.n); err != nil {
 			return err
 		}
 	}
-	if err := wire.Sys.WriteReg(t, 0x01, 0x22, 1); err != nil { // demod-control-1
+	if err := wire.BlockSys.WriteReg(t, 0x01, 0x22, 1); err != nil { // demod-control-1
 		return err
 	}
-	if err := wire.Sys.WriteReg(t, 0x02, 0xe8, 1); err != nil { // demod-control: power on
+	if err := wire.BlockSys.WriteReg(t, 0x02, 0xe8, 1); err != nil { // demod-control: power on
 		return err
 	}
 
@@ -116,7 +116,7 @@ func BasebandInit(t wire.Transport) error {
 // PowerDown powers off the demodulator and ADCs (RFC §7.1 step 5,
 // device-close direction: same register takes 0x20 on power-down).
 func PowerDown(t wire.Transport) error {
-	return wire.Sys.WriteReg(t, 0x02, 0x20, 1)
+	return wire.BlockSys.WriteReg(t, 0x02, 0x20, 1)
 }
 
 // setIF programs the 22-bit two's-complement IF NCO phase-increment

@@ -20,10 +20,10 @@ func (d *Device) Read(buf []byte) (int, error) {
 // stream: re-arms the USB-core endpoint-control register with no
 // corresponding host-side buffer-queue action.
 func (d *Device) ResetBuffer() error {
-	if err := wire.USB.WriteReg(d.t, 0x00, 0x1002, 2); err != nil {
+	if err := wire.BlockUSB.WriteReg(d.t, 0x00, 0x1002, 2); err != nil {
 		return err
 	}
-	return wire.USB.WriteReg(d.t, 0x00, 0x0000, 2)
+	return wire.BlockUSB.WriteReg(d.t, 0x00, 0x0000, 2)
 }
 
 const (

@@ -6,6 +6,7 @@ import "github.com/dim13/r82xx/wire"
 // from, bypassing the tuner's IF output entirely (RFC §7.7).
 type DirectSamplingMode int
 
+// DirectSamplingMode values (RFC §7.7).
 const (
 	DirectSamplingOff DirectSamplingMode = iota
 	DirectSamplingI                      // I-ADC direct

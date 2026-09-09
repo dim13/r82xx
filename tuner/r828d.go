@@ -306,6 +306,7 @@ func (tu *Tuner) SetDitheringEnabled() error {
 	return tu.setDithering(false)
 }
 
+// SetDitheringDisabled clears the PLL dithering bit.
 func (tu *Tuner) SetDitheringDisabled() error {
 	return tu.setDithering(true)
 }

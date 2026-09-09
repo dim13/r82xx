@@ -288,6 +288,7 @@ func (d *Device) SetGainAuto() error {
 	return demod.WithRepeater(d.t, d.tuner.SetGainAuto)
 }
 
+// SetGainManual switches to manual gain control.
 func (d *Device) SetGainManual() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -358,6 +359,7 @@ func (d *Device) SetDitheringEnabled() error {
 	return d.setDithering(d.tuner.SetDitheringEnabled)
 }
 
+// SetDitheringDisabled clears the PLL dithering bit.
 func (d *Device) SetDitheringDisabled() error {
 	return d.setDithering(d.tuner.SetDitheringDisabled)
 }

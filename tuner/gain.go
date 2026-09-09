@@ -33,6 +33,7 @@ func (tu *Tuner) SetGainAuto() error {
 	return tu.setGainMode(0, 1)
 }
 
+// SetGainManual switches LNA and mixer to manual gain control.
 func (tu *Tuner) SetGainManual() error {
 	return tu.setGainMode(1, 0)
 }

@@ -4,6 +4,7 @@ package tuner
 // §8, Table 6).
 type Type int
 
+// Type values (RFC §8, Table 6).
 const (
 	None Type = iota
 	E4000

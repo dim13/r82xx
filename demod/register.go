@@ -42,14 +42,17 @@ func demodWriteReg(t wire.Transport, page, addr uint8, val uint16, n int) error 
 // callers MUST serialize concurrent tuner-facing I2C transactions
 // (Device.mu does this for every exported method).
 
+// RepeaterEnable releases the reset, opening the tuner's I2C bus.
 func RepeaterEnable(t wire.Transport) error {
 	return demodWriteReg(t, 1, 0x01, 0x18, 1)
 }
 
+// RepeaterDisable re-asserts the reset, closing the tuner's I2C bus.
 func RepeaterDisable(t wire.Transport) error {
 	return demodWriteReg(t, 1, 0x01, 0x10, 1)
 }
 
+// WithRepeater enables the repeater, runs fn, and disables it again.
 func WithRepeater(t wire.Transport, fn func() error) error {
 	if err := RepeaterEnable(t); err != nil {
 		return err

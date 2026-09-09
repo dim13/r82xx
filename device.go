@@ -297,13 +297,13 @@ func (d *Device) SetIFGain(code int) error {
 func (d *Device) SetGainAuto() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return withRepeater(d.t, func() error { return d.tuner.SetGainAuto() })
+	return withRepeater(d.t, d.tuner.SetGainAuto)
 }
 
 func (d *Device) SetGainManual() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return withRepeater(d.t, func() error { return d.tuner.SetGainManual() })
+	return withRepeater(d.t, d.tuner.SetGainManual)
 }
 
 // Gain reads back the currently applied composite gain as mixer/LNA
@@ -367,11 +367,11 @@ var ErrR820TOnly = errors.New("r82xx: operation restricted to plain R820T tuners
 // SetDitheringEnabled and SetDitheringDisabled set the PLL dithering
 // bit (RFC §9 "Set PLL dithering enable"). R820T only.
 func (d *Device) SetDitheringEnabled() error {
-	return d.setDithering(func() error { return d.tuner.SetDitheringEnabled() })
+	return d.setDithering(d.tuner.SetDitheringEnabled)
 }
 
 func (d *Device) SetDitheringDisabled() error {
-	return d.setDithering(func() error { return d.tuner.SetDitheringDisabled() })
+	return d.setDithering(d.tuner.SetDitheringDisabled)
 }
 
 func (d *Device) setDithering(fn func() error) error {

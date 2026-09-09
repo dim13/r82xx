@@ -39,30 +39,30 @@ const (
 	blockI2C   block = 6
 )
 
-// blockIndex returns the wIndex for a generic block access. The
-// infrared block is not addressed directly: it is wired up as a
-// sub-page of the system block (RFC §5.2).
-func blockIndex(b block, write bool) uint16 {
+// blockReadIndex and blockWriteIndex return the wIndex for a generic
+// block access. The infrared block is not addressed directly: it is
+// wired up as a sub-page of the system block (RFC §5.2).
+func blockReadIndex(b block) uint16 {
 	if b == blockIR {
-		if write {
-			return uint16(blockSys)<<8 | 0x11
-		}
 		return uint16(blockSys)<<8 | 0x01
 	}
-	w := uint16(b) << 8
-	if write {
-		w |= 0x10
+	return uint16(b) << 8
+}
+
+func blockWriteIndex(b block) uint16 {
+	if b == blockIR {
+		return uint16(blockSys)<<8 | 0x11
 	}
-	return w
+	return uint16(b)<<8 | 0x10
 }
 
 func blockRead(t Transport, b block, wValue uint16, data []byte) error {
-	_, err := t.ControlIn(wValue, blockIndex(b, false), data)
+	_, err := t.ControlIn(wValue, blockReadIndex(b), data)
 	return err
 }
 
 func blockWrite(t Transport, b block, wValue uint16, data []byte) error {
-	return t.ControlOut(wValue, blockIndex(b, true), data)
+	return t.ControlOut(wValue, blockWriteIndex(b), data)
 }
 
 // A 2-byte read reassembles little-endian, asymmetric with the

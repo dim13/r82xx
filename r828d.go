@@ -274,14 +274,23 @@ func (tu *Tuner) LO(loHz float64) error {
 	return tu.setField(0x1a, 0x0c, 2, 0b10) // slowest/most-accurate auto-tune clock once locked
 }
 
-// SetDithering toggles the PLL dithering bit (register 0x12 bit 4,
-// RFC §9 "Set PLL dithering enable"). Device.SetDithering gates this
-// to R820T, matching the reference behavior's own restriction. A
-// later LO() call re-enables dithering whenever fractional-N mode is
-// active, unless this override was set first.
-func (tu *Tuner) SetDithering(enable bool) error {
-	tu.ditheringDisabled = !enable
-	return tu.setField(0x12, 0x10, 4, boolBit(!enable))
+// SetDitheringEnabled and SetDitheringDisabled set the PLL dithering
+// bit (register 0x12 bit 4, RFC §9 "Set PLL dithering enable").
+// Device.SetDitheringEnabled/Disabled gate this to R820T, matching the
+// reference behavior's own restriction. A later LO() call re-enables
+// dithering whenever fractional-N mode is active, unless this
+// override was set first.
+func (tu *Tuner) SetDitheringEnabled() error {
+	return tu.setDithering(false)
+}
+
+func (tu *Tuner) SetDitheringDisabled() error {
+	return tu.setDithering(true)
+}
+
+func (tu *Tuner) setDithering(disabled bool) error {
+	tu.ditheringDisabled = disabled
+	return tu.setField(0x12, 0x10, 4, boolBit(disabled))
 }
 
 func boolBit(b bool) byte {

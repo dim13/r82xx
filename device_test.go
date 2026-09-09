@@ -94,8 +94,8 @@ func TestDeviceEndToEnd(t *testing.T) {
 	if err := d.SetGain(200); err != nil {
 		t.Fatalf("SetGain: %v", err)
 	}
-	if err := d.SetGainMode(true); err != nil {
-		t.Fatalf("SetGainMode: %v", err)
+	if err := d.SetGainAuto(); err != nil {
+		t.Fatalf("SetGainAuto: %v", err)
 	}
 	if err := d.SetExtendedGain(1, 1, 1); err != nil {
 		t.Errorf("SetExtendedGain on R828D: %v", err)
@@ -176,8 +176,8 @@ func TestOpenR820T(t *testing.T) {
 	}
 
 	// R820T-gated ops must work here...
-	if err := d.SetDithering(false); err != nil {
-		t.Errorf("SetDithering on R820T: %v", err)
+	if err := d.SetDitheringDisabled(); err != nil {
+		t.Errorf("SetDitheringDisabled on R820T: %v", err)
 	}
 	if err := d.SetHarmonicOverride(1); err != nil {
 		t.Errorf("SetHarmonicOverride on R820T: %v", err)
@@ -200,8 +200,8 @@ func TestR820TGatedOpsRejectedOnR828D(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if err := d.SetDithering(true); err != ErrR820TOnly {
-		t.Errorf("SetDithering on R828D err = %v, want ErrR820TOnly", err)
+	if err := d.SetDitheringEnabled(); err != ErrR820TOnly {
+		t.Errorf("SetDitheringEnabled on R828D err = %v, want ErrR820TOnly", err)
 	}
 	if err := d.SetHarmonicOverride(5); err != ErrR820TOnly {
 		t.Errorf("SetHarmonicOverride on R828D err = %v, want ErrR820TOnly", err)

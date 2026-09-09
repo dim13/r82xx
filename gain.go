@@ -25,14 +25,19 @@ var GainSteps = [29]int{
 	434, 439, 445, 480, 496,
 }
 
-// SetGainMode toggles hardware-AGC vs. manual control for LNA and
-// mixer together. Automatic: LNA mode bit (0x05 bit4) = 0, mixer mode
-// bit (0x07 bit4) = 1 -- opposite polarity between the two fields.
-func (tu *Tuner) SetGainMode(auto bool) error {
-	lna, mix := byte(1), byte(0)
-	if auto {
-		lna, mix = 0, 1
-	}
+// SetGainAuto and SetGainManual switch hardware-AGC vs. manual control
+// for LNA and mixer together. Automatic: LNA mode bit (0x05 bit4) = 0,
+// mixer mode bit (0x07 bit4) = 1 -- opposite polarity between the two
+// fields.
+func (tu *Tuner) SetGainAuto() error {
+	return tu.setGainMode(0, 1)
+}
+
+func (tu *Tuner) SetGainManual() error {
+	return tu.setGainMode(1, 0)
+}
+
+func (tu *Tuner) setGainMode(lna, mix byte) error {
 	if err := tu.setField(0x05, 0x10, 4, lna); err != nil {
 		return err
 	}
@@ -85,7 +90,7 @@ func compositeSearch(target int) (lnaCode, mixerCode int) {
 // GainSteps) via the composite LNA+mixer search, switching both
 // stages to manual mode. VGA is unaffected.
 func (tu *Tuner) SetGain(tenthsDB int) error {
-	if err := tu.SetGainMode(false); err != nil {
+	if err := tu.SetGainManual(); err != nil {
 		return err
 	}
 	lna, mixer := compositeSearch(tenthsDB)
@@ -99,7 +104,7 @@ func (tu *Tuner) SetGain(tenthsDB int) error {
 // mixer, and VGA stages independently by 0-15 index each, bypassing
 // the composite search.
 func (tu *Tuner) SetExtendedGain(lna, mixer, vga int) error {
-	if err := tu.SetGainMode(false); err != nil {
+	if err := tu.SetGainManual(); err != nil {
 		return err
 	}
 	if err := tu.SetLNAGain(lna); err != nil {

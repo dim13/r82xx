@@ -292,11 +292,18 @@ func (d *Device) SetIFGain(code int) error {
 	return withRepeater(d.t, func() error { return d.tuner.SetVGAGain(code) })
 }
 
-// SetGainMode toggles hardware-AGC vs. manual gain control.
-func (d *Device) SetGainMode(auto bool) error {
+// SetGainAuto and SetGainManual toggle hardware-AGC vs. manual gain
+// control.
+func (d *Device) SetGainAuto() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return withRepeater(d.t, func() error { return d.tuner.SetGainMode(auto) })
+	return withRepeater(d.t, func() error { return d.tuner.SetGainAuto() })
+}
+
+func (d *Device) SetGainManual() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return withRepeater(d.t, func() error { return d.tuner.SetGainManual() })
 }
 
 // Gain reads back the currently applied composite gain as mixer/LNA
@@ -357,15 +364,23 @@ func (d *Device) ClearOverrideRegister(reg byte) {
 // register and mechanism are identical -- kept rather than lifted.
 var ErrR820TOnly = errors.New("r82xx: operation restricted to plain R820T tuners (RFC §9)")
 
-// SetDithering toggles the PLL dithering bit (RFC §9 "Set PLL
-// dithering enable"). R820T only.
-func (d *Device) SetDithering(enable bool) error {
+// SetDitheringEnabled and SetDitheringDisabled set the PLL dithering
+// bit (RFC §9 "Set PLL dithering enable"). R820T only.
+func (d *Device) SetDitheringEnabled() error {
+	return d.setDithering(func() error { return d.tuner.SetDitheringEnabled() })
+}
+
+func (d *Device) SetDitheringDisabled() error {
+	return d.setDithering(func() error { return d.tuner.SetDitheringDisabled() })
+}
+
+func (d *Device) setDithering(fn func() error) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.tuner.chip != TunerR820T {
 		return ErrR820TOnly
 	}
-	return withRepeater(d.t, func() error { return d.tuner.SetDithering(enable) })
+	return withRepeater(d.t, fn)
 }
 
 // SetHarmonicOverride manually forces the harmonic-mixing index (RFC

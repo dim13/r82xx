@@ -41,22 +41,34 @@ func (f *fakeTransport) Strings() (string, string, error) {
 	return f.manufacturer, f.product, nil
 }
 
-func TestBlockIndex(t *testing.T) {
+func TestBlockReadIndex(t *testing.T) {
 	cases := []struct {
-		b     block
-		write bool
-		want  uint16
+		b    block
+		want uint16
 	}{
-		{blockDemod, false, 0x0000},
-		{blockDemod, true, 0x0010},
-		{blockI2C, false, 0x0600},
-		{blockI2C, true, 0x0610},
-		{blockIR, false, 0x0201}, // aliased into the system block
-		{blockIR, true, 0x0211},
+		{blockDemod, 0x0000},
+		{blockI2C, 0x0600},
+		{blockIR, 0x0201}, // aliased into the system block
 	}
 	for _, tc := range cases {
-		if got := blockIndex(tc.b, tc.write); got != tc.want {
-			t.Errorf("blockIndex(%v, %v) = %#x, want %#x", tc.b, tc.write, got, tc.want)
+		if got := blockReadIndex(tc.b); got != tc.want {
+			t.Errorf("blockReadIndex(%v) = %#x, want %#x", tc.b, got, tc.want)
+		}
+	}
+}
+
+func TestBlockWriteIndex(t *testing.T) {
+	cases := []struct {
+		b    block
+		want uint16
+	}{
+		{blockDemod, 0x0010},
+		{blockI2C, 0x0610},
+		{blockIR, 0x0211}, // aliased into the system block
+	}
+	for _, tc := range cases {
+		if got := blockWriteIndex(tc.b); got != tc.want {
+			t.Errorf("blockWriteIndex(%v) = %#x, want %#x", tc.b, got, tc.want)
 		}
 	}
 }

@@ -46,7 +46,10 @@ type Tuner struct {
 	ditheringDisabled bool // R820T-only manual override, §9 "Set PLL dithering enable"
 }
 
-type regOverride struct{ mask, val byte }
+type regOverride struct {
+	mask byte
+	val  byte
+}
 
 // NewTuner constructs a Tuner for the given detected chip, bound to
 // the given I2C transport and reference crystal (16.0MHz plain R828D,
@@ -137,7 +140,9 @@ func (tu *Tuner) Override(reg, mask, val uint8) error {
 }
 
 // ClearOverride removes a pinned override.
-func (tu *Tuner) ClearOverride(reg uint8) { delete(tu.overrides, reg) }
+func (tu *Tuner) ClearOverride(reg uint8) {
+	delete(tu.overrides, reg)
+}
 
 // Detect confirms the chip-ID byte (RFC Table 8, Table 17: identical
 // for R820T and R828D -- only the bus address disambiguates them).

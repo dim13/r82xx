@@ -5,7 +5,10 @@ package r82xx
 // roles only) -- guessing would misprogram real hardware, so the
 // caller supplies them (e.g. off a datasheet or logic-analyzer capture).
 type GPIORegs struct {
-	Input, Output, OutputEnable, PullDisable uint8
+	Input        uint8
+	Output       uint8
+	OutputEnable uint8
+	PullDisable  uint8
 }
 
 func gpioBit(pin int) uint16 {

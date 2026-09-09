@@ -6,13 +6,24 @@ package r82xx
 // lnaSteps and mixerSteps are relative-unit step tables in the
 // reference behavior's own units, not confirmed absolute dB (RFC §15
 // item 9). vgaSteps has a stated calibrated absolute dB scale.
-var lnaSteps = [16]int{0, 9, 22, 62, 100, 113, 144, 166, 192, 223, 249, 263, 282, 287, 322, 335}
-var mixerSteps = [16]int{0, 5, 15, 25, 44, 53, 63, 88, 105, 115, 123, 139, 152, 158, 161, 153}
+var lnaSteps = [16]int{
+	0, 9, 22, 62, 100, 113, 144, 166,
+	192, 223, 249, 263, 282, 287, 322, 335,
+}
+var mixerSteps = [16]int{
+	0, 5, 15, 25, 44, 53, 63, 88,
+	105, 115, 123, 139, 152, 158, 161, 153,
+}
 
 // GainSteps is the fixed, hard-coded gain capability list (tenths of
 // dB) reported to API callers (RFC Table 7); it involves no tuner I2C
 // traffic.
-var GainSteps = [29]int{0, 9, 14, 27, 37, 77, 87, 125, 144, 157, 166, 197, 207, 229, 254, 280, 297, 328, 338, 364, 372, 386, 402, 421, 434, 439, 445, 480, 496}
+var GainSteps = [29]int{
+	0, 9, 14, 27, 37, 77, 87, 125,
+	144, 157, 166, 197, 207, 229, 254, 280,
+	297, 328, 338, 364, 372, 386, 402, 421,
+	434, 439, 445, 480, 496,
+}
 
 // SetGainMode toggles hardware-AGC vs. manual control for LNA and
 // mixer together. Automatic: LNA mode bit (0x05 bit4) = 0, mixer mode

@@ -26,7 +26,7 @@ type tunerCandidate struct {
 	addr7    uint8
 	checkReg uint8
 	want     uint8
-	mask     uint8 // 0 means 0xff (compare full byte)
+	mask     uint8
 }
 
 // candidates is the fixed detection priority order (RFC Table 6). A
@@ -35,12 +35,12 @@ type tunerCandidate struct {
 // needs caller-supplied GPIORegs (§7.9) and is moot once R828D (this
 // package's target) matches first.
 var candidates = []tunerCandidate{
-	{TunerE4000, 0x64, 0x02, 0x40, 0},
-	{TunerFC0013, 0x63, 0x00, 0xa3, 0},
-	{TunerR820T, 0x1a, 0x00, 0x69, 0},
-	{TunerR828D, 0x3a, 0x00, 0x69, 0},
+	{TunerE4000, 0x64, 0x02, 0x40, 0xff},
+	{TunerFC0013, 0x63, 0x00, 0xa3, 0xff},
+	{TunerR820T, 0x1a, 0x00, 0x69, 0xff},
+	{TunerR828D, 0x3a, 0x00, 0x69, 0xff},
 	{TunerFC2580, 0x56, 0x01, 0x56, 0x7f},
-	{TunerFC0012, 0x63, 0x00, 0xa1, 0},
+	{TunerFC0012, 0x63, 0x00, 0xa1, 0xff},
 }
 
 // detectTuner runs the fixed-order probe of RFC §8 with the I2C
@@ -57,11 +57,7 @@ func detectTuner(t Transport) (TunerType, error) {
 		if err != nil {
 			continue
 		}
-		mask := c.mask
-		if mask == 0 {
-			mask = 0xff
-		}
-		if b[0]&mask == c.want {
+		if b[0]&c.mask == c.want {
 			return c.typ, nil
 		}
 	}

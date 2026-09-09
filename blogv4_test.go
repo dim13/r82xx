@@ -3,7 +3,10 @@ package r82xx
 import "testing"
 
 func TestUpconvertHF(t *testing.T) {
-	cases := []struct{ requestedHz, wantHz float64 }{
+	cases := []struct {
+		requestedHz float64
+		wantHz      float64
+	}{
 		{1_000_000, 29_800_000},
 		{28_800_000, 28_800_000}, // boundary: not shifted
 		{28_799_999, 57_599_999},

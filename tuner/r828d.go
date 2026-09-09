@@ -36,6 +36,19 @@ const (
 	BlogV4CrystalHz       = 28_800_000
 )
 
+// NominalCrystalHz picks the nominal reference crystal for chip,
+// applying the Blog V4 override when blogV4 is set (RFC Table 9,
+// Table 17; §11.1).
+func NominalCrystalHz(chip Type, blogV4 bool) float64 {
+	if chip != R828D {
+		return R820TNominalCrystalHz
+	}
+	if blogV4 {
+		return BlogV4CrystalHz
+	}
+	return R828DNominalCrystalHz
+}
+
 // Tuner drives the shared R820T/R828D register map and behavior. Its
 // registers 0x05-0x1F are shadow-cached: field updates read-modify-write
 // the cache and issue one I2C write, without a round-trip read.

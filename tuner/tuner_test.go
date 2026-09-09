@@ -252,3 +252,21 @@ func TestApplyInputSwitchCaching(t *testing.T) {
 		t.Errorf("ApplyInputSwitch skipped I2C traffic on a band change")
 	}
 }
+
+func TestNominalCrystalHz(t *testing.T) {
+	cases := []struct {
+		chip   Type
+		blogV4 bool
+		want   float64
+	}{
+		{R820T, false, R820TNominalCrystalHz},
+		{R820T, true, R820TNominalCrystalHz}, // blogV4 never true for R820T in practice
+		{R828D, false, R828DNominalCrystalHz},
+		{R828D, true, BlogV4CrystalHz},
+	}
+	for _, tc := range cases {
+		if got := NominalCrystalHz(tc.chip, tc.blogV4); got != tc.want {
+			t.Errorf("NominalCrystalHz(%v, %v) = %v, want %v", tc.chip, tc.blogV4, got, tc.want)
+		}
+	}
+}

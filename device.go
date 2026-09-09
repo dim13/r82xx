@@ -67,13 +67,7 @@ func Open(t wire.Transport) (*Device, error) {
 	}
 
 	blogV4 := typ == tuner.R828D && manufacturer == "RTLSDRBlog" && product == "Blog V4"
-	crystalHz := float64(tuner.R820TNominalCrystalHz)
-	if typ == tuner.R828D {
-		crystalHz = tuner.R828DNominalCrystalHz
-		if blogV4 {
-			crystalHz = tuner.BlogV4CrystalHz
-		}
-	}
+	crystalHz := tuner.NominalCrystalHz(typ, blogV4)
 
 	if err := demod.ApplyR820TR828D(t, crystalHz); err != nil {
 		demod.RepeaterDisable(t)
@@ -136,13 +130,7 @@ func (d *Device) SetPPM(ppm float64) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.ppm = ppm
-	nominalTuner := float64(tuner.R820TNominalCrystalHz)
-	if d.tuner.Chip == tuner.R828D {
-		nominalTuner = tuner.R828DNominalCrystalHz
-		if d.blogV4 {
-			nominalTuner = tuner.BlogV4CrystalHz
-		}
-	}
+	nominalTuner := tuner.NominalCrystalHz(d.tuner.Chip, d.blogV4)
 	d.tuner.CrystalHz = demod.CorrectedHz(nominalTuner, ppm)
 	return demod.SetPPM(d.t, ppm)
 }

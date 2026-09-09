@@ -11,12 +11,6 @@ import (
 	"github.com/dim13/r82xx/wire"
 )
 
-// USB device identity (RFC §4).
-const (
-	VendorID  = 0x0bda
-	ProductID = 0x2838
-)
-
 // Device is an opened RTL2832U + R820T/R828D receiver (RFC §14
 // walkthrough).
 type Device struct {

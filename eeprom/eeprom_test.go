@@ -4,8 +4,8 @@ import "testing"
 
 func TestLayoutRoundTrip(t *testing.T) {
 	want := Layout{
-		VendorID:     0x0bda, // r82xx.VendorID
-		ProductID:    0x2838, // r82xx.ProductID
+		VendorID:     0x0bda, // RTL-SDR Blog V4
+		ProductID:    0x2838,
 		SerialEnable: true,
 		RemoteWakeup: true,
 		Manufacturer: "RTLSDRBlog",

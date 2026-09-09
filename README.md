@@ -19,6 +19,8 @@ implementing `wire.Transport` (control transfers, bulk reads, USB
 string descriptors) — wrap [`google/gousb`](https://github.com/google/gousb)
 or any other libusb binding.
 
+USB device identity: VID `0x0bda`, PID `0x2838` (RFC §4).
+
 ## Usage
 
 ```go

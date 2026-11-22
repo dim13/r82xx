@@ -1,5 +1,5 @@
 Hardware Specification                                     RTL2832U-R828D
-Informational                                              September 2026
+Informational                                               November 2026
 
 
                     RTL2832U + R828D SDR Receiver
@@ -517,17 +517,19 @@ Table of Contents
    Executed once, at device open.  Fixed sequence, in order, all via
    the paged-register mechanism (Section 5.4) unless noted:
 
-   1.   USB-core system-control register <- 0x09 (1 byte).
+   1.   USB-core system-control register (0x2000) <- 0x09 (1 byte).
 
-   2.   USB-core endpoint max-packet-size register <- 0x0002
+   2.   USB-core endpoint max-packet-size register (0x2158) <- 0x0002
         (2 bytes).
 
-   3.   USB-core endpoint control register <- 0x1002 (2 bytes).
+   3.   USB-core endpoint control register (0x2148) <- 0x1002
+        (2 bytes).
 
-   4.   System block: demodulator-control-1 register <- 0x22
+   4.   System block: demodulator-control-1 register (0x300B) <- 0x22
         (1 byte).
 
-   5.   System block: demodulator-control register <- 0xE8 (1 byte)
+   5.   System block: demodulator-control register (0x3000) <- 0xE8
+        (1 byte)
         -- powers on the demodulator and ADCs.  The same register
         takes value 0x20 on power-down (device close).
 
@@ -564,7 +566,9 @@ Table of Contents
         AGC-enable bit (bit 0).  (Unverified) -- observed in the
         reference behavior this specification is based on to have no
         measurable effect; included for completeness, but
-        implementers SHOULD NOT depend on it doing anything.
+        implementers SHOULD NOT depend on it doing anything.  Then
+        page 1, address 0x04 <- 0x00: clears the digital-AGC enable
+        (bit 0), as observed on the wire from the reference driver.
 
    12.  Page 0, address 0x61 <- 0x60: disables the DVB-T
         packet-filter logic.  Irrelevant to raw IQ streaming; the
@@ -584,6 +588,12 @@ Table of Contents
 
    15.  Page 0, address 0x0D <- 0x83: disables a 4.096 MHz auxiliary
         test-clock output that would otherwise appear on a debug pin.
+
+   The USB-core and system-block register addresses above (and the
+   GPIO registers of Section 7.9) were confirmed from a USB capture of
+   the reference driver.  They MUST be exact: a control write to an
+   unmapped address is answered with a STALL, which a host USB stack
+   reports as a pipe error, and device open fails at step 1.
 
 7.2.  Channel (Decimation) FIR Filter
 
@@ -798,23 +808,21 @@ Table of Contents
 7.9.  GPIO and Auxiliary I/O
 
    Four one-byte registers in the system block provide 8
-   general-purpose I/O lines:
+   general-purpose I/O lines.  Addresses as observed on the wire:
 
    +--------------+-----------------------------------------------------+
    | Register     | Role                                                |
    | (Function)   |                                                     |
    +--------------+-----------------------------------------------------+
-   | GPIO input   | Read current pin state                              |
+   | GPIO input   | 0x3002: read current pin state                      |
    | data         |                                                     |
-   | GPIO output  | Drive pin state (when configured as output)         |
+   | GPIO output  | 0x3001: drive pin state (when configured as output) |
    | data         |                                                     |
-   | GPIO output  | Per-pin output-enable / direction                   |
+   | GPIO output  | 0x3003: per-pin output-enable / direction           |
    | enable       |                                                     |
-   | GPIO         | A second per-pin direction-adjacent control,        |
-   | pull/disable | written alongside output- enable whenever a pin's   |
-   |              | direction changes.  (Unverified) -- exact           |
-   |              | polarity/semantics relative to output-enable is     |
-   |              | inferred, not confirmed; see Section 15, item 3.    |
+   | GPIO         | 0x3004: per-pin pull/disable, written alongside     |
+   | pull/disable | output-enable whenever a pin's direction changes    |
+   |              | (Section 15, item 3).                               |
    +--------------+-----------------------------------------------------+
 
                   Table 5: GPIO Register Set (System Block)
@@ -824,8 +832,10 @@ Table of Contents
 
    o  Single-bit write: read-modify-write the output-data register.
 
-   o  Configure a pin as output: clear its bit in the pull/disable
-      register, then set its bit in the output-enable register.
+   o  Configure a pin as output: read-modify-write the pull/disable
+      register to clear its bit, then read-modify-write the
+      output-enable register to set its bit (order confirmed on the
+      wire).
 
    o  Configure a pin as input: set its bit in the pull/disable
       register, then clear its bit in the output-enable register.
@@ -845,6 +855,9 @@ Table of Contents
       is a reasonable default pin assignment, but implementers SHOULD
       treat it as configurable per board rather than a fixed hardware
       fact.
+
+   o  On the RTL-SDR Blog V4, GPIO 5 drives an RF switch that is part
+      of the three-way input selection (Section 11.4).
 
 
 8.  Tuner Detection Sequence
@@ -961,7 +974,9 @@ Table of Contents
    |                 | not identical structures.                        |
    | Set/get         | Applies a channel-filter bandwidth request in Hz |
    | bandwidth       | (Section 10.5); passing 0 Hz falls back to the   |
-   |                 | current sample rate.                             |
+   |                 | current sample rate.  The resulting delivered IF |
+   |                 | MUST also be programmed into the demodulator     |
+   |                 | (Section 7.3) before retuning.                   |
    | Set IF-passband | Shifts the tuner's IF filter center              |
    | center          |                                                  |
    | offset          | relative to nominal, in Hz.                      |
@@ -1860,13 +1875,23 @@ Table of Contents
    MHz, 10 pF for 90-180 MHz, 0 pF above that) is dormant data that
    would only take effect if a different cap-mode selector were
    deliberately chosen.  An implementation MAY therefore treat the
-   crystal-cap field as a hardcoded 0x00, while keeping the
+   crystal-cap field as a hardcoded 0x00.  The write MUST cover bit 3
+   as well (mask 0x0B, value 0x00), since "high-drive" means bit 3 = 0
+   and the power-up block (Table 19) leaves it set; the reference
+   driver writes it this way on every tune.  Keep the
    dormant per-band table above on hand in case dynamic cap-mode
    selection is ever revisited.
 
 10.5.  IF / Baseband Filter Bandwidth Control
 
-   Wide bandwidths (requested > 4.5 MHz) use three fixed presets:
+   The filter is set by register 0x0A bit 4 and register 0x0B bits
+   7:5 and 3:0.  Both registers MUST be written masked (0x0A mask
+   0x10, 0x0B mask 0xEF): their other bits hold the filter current
+   and the self-calibration result, which a full-byte write would
+   destroy.  Register 0x1E is not part of bandwidth selection.
+
+   Bandwidths above 2.43 MHz (the widest low-pass corner plus both
+   high-pass steps, see below) use three fixed presets:
 
    +-------------+-----------+---------+---------+--------------------+
    | Requested   | Applied   | Reg     | Reg     | Delivered IF       |
@@ -1875,55 +1900,64 @@ Table of Contents
    | > 7 MHz     | 8 MHz     | 0x10    | 0x0B    | 4.570 MHz          |
    | > 6, <= 7   | 7 MHz     | 0x10    | 0x2A    | 4.570 MHz          |
    | MHz         |           |         |         |                    |
-   | > 4.5, <=   | 6 MHz     | 0x10    | 0x6B    | 3.570 MHz          |
+   | > 2.43, <=  | 6 MHz     | 0x10    | 0x6B    | 3.570 MHz          |
    | 6 MHz       |           |         |         |                    |
    +-------------+-----------+---------+---------+--------------------+
 
                   Table 11: Wide Bandwidth Presets
 
-   Narrower bandwidths (<= 4.5 MHz) select the nearest row (by
-   comparing against the midpoint between adjacent entries) of an
-   18-row table.  Each row also carries a small IF correction added
-   to its nominal IF center to get the actual delivered IF; both are
-   given below.  (An alternate row set exists that splits several of
-   these entries into two steep-single-edge-filter variants for
-   independent upper/lower-sideband corner shaping, but it is
-   compiled out by default -- the plain centered-filter row is what is
-   active unless that build option is deliberately enabled.)
+   Narrower bandwidths (<= 2.43 MHz) are composed from a base IF of
+   2.300 MHz, two high-pass steps, and one low-pass corner:
 
-   +----------+----------+------------+-----------+------+------+------+
-   | Nominal  | Nominal  | IF         | Delivered | Reg  | Reg  | Reg  |
-   | BW (kHz) | IF (kHz) | Correction | IF (kHz)  | 0x0A | 0x0B | 0x1E |
-   |          |          | (kHz)      |           |      |      |      |
-   +----------+----------+------------+-----------+------+------+------+
-   | 290      | 1950     | -25        | 1925      | 0x0F | 0xE7 | 0x00 |
-   | 375      | 1870     | -13        | 1857      | 0x0F | 0xE8 | 0x00 |
-   | 420      | 2100     | +21        | 2121      | 0x0F | 0xD7 | 0x00 |
-   | 470      | 1800     | -12        | 1788      | 0x0F | 0xE9 | 0x00 |
-   | 600      | 1700     | +6         | 1706      | 0x0F | 0xEA | 0x00 |
-   | 860      | 1550     | +8         | 1558      | 0x0F | 0xEB | 0x00 |
-   | 950      | 2200     | +5         | 2205      | 0x0F | 0x88 | 0x00 |
-   | 1100     | 2100     | +25        | 2125      | 0x0F | 0x89 | 0x00 |
-   | 1200     | 1350     | 0          | 1350      | 0x0F | 0xEE | 0x00 |
-   | 1300     | 2050     | -7         | 2043      | 0x0F | 0x8A | 0x00 |
-   | 1503*    | 1300     | -24        | 1276      | 0x0F | 0xEF | 0x60 |
-   | 1600     | 1900     | 0          | 1900      | 0x0F | 0x8B | 0x00 |
-   | 1753*    | 1400     | +12        | 1412      | 0x0F | 0xCF | 0x60 |
-   | 1800     | 1400     | 0          | 1400      | 0x0F | 0xAF | 0x00 |
-   | 1953*    | 1500     | +30        | 1530      | 0x0F | 0x8F | 0x60 |
-   | 2200     | 1600     | 0          | 1600      | 0x0F | 0x8F | 0x00 |
-   | 3000     | 2000     | 0          | 2000      | 0x04 | 0x8F | 0x00 |
-   | 5000     | 3570     | 0          | 3570      | 0x0B | 0x6B | 0x00 |
-   +----------+----------+------------+-----------+------+------+------+
-   * steep-corner row
+   1.  Register 0x0A field value = 0x00; start register 0x0B at 0xA0
+       (bit 7 set; bit 5 set = high-pass step 2 (380 kHz) off, which
+       is always the case below the presets).
 
-              Table 12: Narrow Bandwidth Filter Table (18 Rows)
+   2.  If the requested bandwidth exceeds 2.05 MHz (1.70 + 0.35),
+       engage high-pass step 1: subtract 350 kHz from the request, add
+       350 kHz to the IF and to the applied bandwidth.  Otherwise set
+       register 0x0B bit 6 (step 1 off).
 
-   Default / init-time bandwidth: 3 MHz nominal, register 0x0A = 0x0B,
-   register 0x0B = 0x6B, delivering a 3.570 MHz IF (matches the
-   widely-quoted "3.57 MHz IF" figure for this tuner family).  The
-   "wide" preset register-0x0A value (0x10) is a special case that
-   bypasses the fine-tune nibble entirely.
+   3.  Find the first low-pass corner in Table 12 that is narrower
+       than the (remaining) request, then step back one entry to the
+       narrowest corner still at least as wide; if none is narrower,
+       use the narrowest; if even the widest is narrower, use the
+       widest.  With i its index, register 0x0B bits 3:0 = 15 - i, and
+       the corner is added to the applied bandwidth.
+
+   4.  Delivered IF = IF - applied bandwidth / 2.
+
+   +-------+--------------+
+   | Index | Corner (kHz) |
+   +-------+--------------+
+   | 0     | 1700         |
+   | 1     | 1600         |
+   | 2     | 1550         |
+   | 3     | 1450         |
+   | 4     | 1200         |
+   | 5     | 900          |
+   | 6     | 700          |
+   | 7     | 550          |
+   | 8     | 450          |
+   | 9     | 350          |
+   +-------+--------------+
+
+                Table 12: IF Low-Pass Filter Corners
+
+   Example (confirmed on the wire against the reference driver): a
+   1.024 MHz request leaves high-pass step 1 off, selects the
+   1200 kHz corner (index 4), and yields register 0x0B = 0xEB and a
+   delivered IF of 2.300 - 0.600 = 1.700 MHz.
+
+   Every bandwidth change moves the delivered IF.  The demodulator IF
+   (Section 7.3) MUST be reprogrammed to the new delivered IF, and the
+   current frequency retuned, after each change; otherwise the band
+   lands outside the sampled span (an empty, flat spectrum).
+
+   Default / init-time state: the power-up block (Table 19) leaves
+   register 0x0A = 0xDB and 0x0B = 0x6B, i.e. the 6 MHz preset with a
+   3.570 MHz IF (the widely-quoted "3.57 MHz IF" figure for this tuner
+   family), until the first bandwidth request.
 
    Filter self-calibration procedure (run at initialization and on
    any operating-standard change):
@@ -1964,6 +1998,12 @@ Table of Contents
    Manual mode: both mode bits set to the opposite polarity from
    above, with 4-bit gain codes written directly to register 0x05
    bits 3:0 (LNA) and register 0x07 bits 3:0 (mixer).
+
+   Each gain-mode change also fixes the VGA, masked write to register
+   0x0C with mask 0x9F (clearing bits 7 and 4): code 11 (~26.5 dB) in
+   automatic mode, code 8 (~16.3 dB) in manual mode, as observed from
+   the reference driver.  On a Blog V4 the code is always 8
+   (Section 11.5).
 
    LNA gain steps (register 0x05 bits 3:0):
 
@@ -2164,19 +2204,25 @@ Table of Contents
        +----------+-----------+----------+-------+--------------+-----------+
        | Register | Value     | Register | Value | Register     | Value     |
        +----------+-----------+----------+-------+--------------+-----------+
-       | 0x05     | 0x80      | 0x0D     | 0x53  | 0x15         | 0x00      |
-       | 0x06     | 0x13      | 0x0E     | 0x75  | 0x16         | 0xC0      |
+       | 0x05     | 0x00      | 0x0D     | 0x53  | 0x15         | 0x00      |
+       | 0x06     | 0x12      | 0x0E     | 0x75  | 0x16         | 0xC0      |
        | 0x07     | 0x70      | 0x0F     | 0x68  | 0x17         | 0x30      |
        | 0x08     | 0xC0      | 0x10     | 0x6C  | 0x18         | 0x48      |
        | 0x09     | 0x40      | 0x11     | 0xBB  | 0x19         | 0xEC      |
        | 0x0A     | 0xDB      | 0x12     | 0x80  | 0x1A         | 0x60      |
        | 0x0B     | 0x6B      | 0x13     | 0x31  | 0x1B         | 0x00      |
        | 0x0C     | 0xEB      | gain     |       | 0x1C 0x1D    | 0x24 0xDD |
-       |          | (0xE0 \   |          |       | 0x1E 0x1F    | 0x0E 0x40 |
+       |          | (0xE0 \   |          |       | 0x1E 0x1F    | 0x6E 0x40 |
        |          | code 11)  |          |       |              |           |
        +----------+-----------+----------+-------+--------------+-----------+
 
                Table 19: Power-Up Default Register Block
+
+       These values match the register state the reference driver
+       leaves after its own power-up, as captured on the wire:
+       register 0x05 bit 7 = 0 (loop-through on), register 0x06
+       bit 0 = 0, and register 0x1E = 0x6E.  Earlier revisions of this
+       document listed 0x80, 0x13 and 0x0E.
 
        Register 0x13's value (0x31) is a fixed diagnostic tag stamped
        into the DAC field, inert since VCO control mode (bit 6) stays
@@ -2198,12 +2244,12 @@ Table of Contents
        using the fixed 56 MHz reference and 3.570 MHz IF-center as
        scratch values, and apply the resulting code.
 
-   8.  Set LNA/mixer power-detector take-off-point trims and AGC
-       clock rate for the digital-receive operating point (lowest
-       take-off point, fastest-then-settled AGC clock -- the only
-       mode this specification's target device uses; an alternative
-       analog-TV-style operating point with different trims exists in
-       the register definitions but is out of scope here).  Clear
+   8.  Set the AGC clock rate (register 0x1A bits 5:4 = 0b10) for
+       the digital-receive operating point.  The take-off-point trims
+       stay at the Table 19 values (0x1C = 0x24, 0x1D = 0xDD); they
+       MUST NOT be overwritten with the "lowest take-off point"
+       values (0xF4/0xFF) an earlier revision of this document gave,
+       which the reference driver never leaves in place.  Clear
        both RF-input-select bits to their default (deselected) state,
        ahead of the frequency-dependent input switching of
        Section 10.7/11.4 taking over on the first real tune request.
@@ -2217,33 +2263,13 @@ Table of Contents
    Section 7.1.  This MUST happen unconditionally on every device
    open -- it is not an optional or legacy code path.
 
-   AGC-loop gain/threshold constants (empirically-tuned analog
-   gain-loop tuning, matched specifically to this tuner's noise/gain
-   profile -- the same register set is written with different
-   per-tuner-family constants for the other tuner families this
-   specification does not cover):
-
-   +--------------------------------+--------+
-   | Register (Page 1 Unless Noted) | Value  |
-   +--------------------------------+--------+
-   | 0x02                           | 0x40   |
-   | 0x03                           | 0x80   |
-   | 0x04                           | 0xCC   |
-   | 0x05                           | 0xBE   |
-   | 0x06                           | 0x35   |
-   | 0x07                           | 0x40   |
-   | 0x12                           | 0x5A   |
-   | 0xC7                           | 0x24   |
-   | 0xC8                           | 0x14   |
-   | 0xC9                           | 0x21   |
-   | 0xCA                           | 0x21   |
-   | 0xCB                           | 0x00   |
-   | 0xCD                           | 0x10   |
-   | 0xCE                           | 0x10   |
-   | 0x11 (page 0, 2 bytes)         | 0xE9F4 |
-   +--------------------------------+--------+
-
-           Table 20: R828D-Specific Demodulator AGC Constants
+   An earlier revision of this document listed a block of
+   demodulator AGC-loop constants here (page 1 registers 0x02-0x07,
+   0x12, 0xC7-0xCE, page 0 register 0x11) as part of this
+   reconfiguration.  Those belong to the DVB-T receive path; the
+   reference driver does not write them in SDR mode, as confirmed on
+   the wire, and an implementation MUST NOT write them.  (Table 20
+   is withdrawn.)
 
    ADC/IF datapath reconfiguration -- this is the operationally
    significant part: it moves the R828D path permanently off the
@@ -2339,6 +2365,17 @@ Table of Contents
    +------+-------------+-------------+-------------+-------------------+
 
                 Table 22: Blog V4 Three-Way Input Switch
+
+   Observed on the wire for the VHF band: register 0x06 bit 3 = 0 and
+   register 0x05 bits 6:5 = 0b11, matching the table.
+
+   Newer production batches of the board add an RF switch driven by
+   GPIO 5 (Section 7.9).  On every band change, configure GPIO 5 as an
+   output and drive it high for VHF and UHF, low for HF.  Older
+   batches ignore the pin, so an implementation MUST always drive it.
+   Leaving it unset was one of several deviations that together left
+   a board with flat noise and no stations, about 25 dB below the
+   reference driver.
 
    An implementation MUST only issue the register write when the
    newly-computed band differs from the previously selected one
@@ -2456,7 +2493,7 @@ Table of Contents
 
    5.  Run the tuner's own power-up initialization (Section 10.10),
        including the filter self-calibration (Section 10.5) that
-       establishes the default 3 MHz-nominal / 3.570 MHz-IF bandwidth
+       leaves the default 6 MHz-preset / 3.570 MHz-IF bandwidth
        setting.
 
    At this point the device is initialized but not yet tuned to a
@@ -2475,9 +2512,12 @@ Table of Contents
    2.  Optionally set tuner channel-filter bandwidth (Section 10.5,
        via Section 9) -- this changes the tuner's delivered IF center
        (IF_center_Hz), which feeds directly into the local-oscillator
-       math of Phase C.2 below.  If bandwidth is never explicitly
-       set, the 3 MHz-nominal / 3.570 MHz-IF default from Phase A.5
-       remains in effect.
+       math of Phase C.2 below, and MUST be followed by programming
+       that IF into the demodulator (Section 7.3) and retuning.  A
+       host that sets bandwidth to match the sample rate (as rtl_tcp
+       style servers do) does this on every sample-rate change.  If
+       bandwidth is never explicitly set, the 6 MHz-preset /
+       3.570 MHz-IF default from Phase A.5 remains in effect.
 
 14.3.  Phase C: Tune to a Frequency
 
@@ -2558,11 +2598,10 @@ Table of Contents
        from this pass.
 
    3.  GPIO output-enable vs. pull/disable register semantics
-       (Section 7.9): which register is true direction control and
-       which is a pull/pin-disable register is inferred from usage
-       patterns, not confirmed from an authoritative register
-       reference.  Getting this backwards would invert GPIO direction
-       behavior.
+       (Section 7.9) -- RESOLVED as far as output configuration goes:
+       the reference driver clears the pin's bit in 0x3004, then sets
+       it in 0x3003, to make a pin an output.  The input direction is
+       still inferred.
 
    4.  Register 0x06 (page 0) reuse (Section 7.1 step 13,
        Section 7.7): the same demodulator register carries at least
@@ -2592,7 +2631,9 @@ Table of Contents
        documented both as part of a 2-bit RF-input-select field and,
        separately, as a standalone "LNA1 power" bit -- these appear to
        be mutually exclusive interpretations depending on chip
-       variant, not fully disambiguated here.  Treat with care.
+       variant.  For the Blog V4 VHF band the reference driver leaves
+       bits 6:5 = 0b11 (Section 11.4), consistent with the 2-bit
+       field reading.
 
    9.  LNA and mixer gain-step table units (Section 10.6): confirmed
        relative-ordering data only -- the VGA stage has a stated

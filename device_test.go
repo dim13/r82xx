@@ -15,6 +15,7 @@ type smokeTransport struct {
 	i2c                   map[uint8]map[uint8]byte
 	pendingReg            map[uint8]uint8
 	demod                 map[uint16]byte // page<<8 | addr
+	sys                   map[uint16]byte // system block, by address
 }
 
 func newSmokeTransport(manufacturer, product string) *smokeTransport {
@@ -33,6 +34,9 @@ func newSmokeTransport(manufacturer, product string) *smokeTransport {
 }
 
 func (s *smokeTransport) ControlIn(wValue, wIndex uint16, data []byte) (int, error) {
+	if wIndex == 0x0200 && len(data) == 1 { // system block read
+		data[0] = s.sys[wValue]
+	}
 	if wIndex&0xff00 == 0x0600 { // I2C block (wire.blockI2C)
 		slave := uint8(wValue >> 1)
 		reg := s.pendingReg[slave]
@@ -45,6 +49,12 @@ func (s *smokeTransport) ControlIn(wValue, wIndex uint16, data []byte) (int, err
 }
 
 func (s *smokeTransport) ControlOut(wValue, wIndex uint16, data []byte) error {
+	if wIndex == 0x0210 && len(data) == 1 { // system block write
+		if s.sys == nil {
+			s.sys = map[uint16]byte{}
+		}
+		s.sys[wValue] = data[0]
+	}
 	if wValue&0xff == 0x20 && wIndex&0x10 != 0 && len(data) == 1 { // demod page write
 		if s.demod == nil {
 			s.demod = map[uint16]byte{}
@@ -237,6 +247,37 @@ func TestSetBandwidthUpdatesIF(t *testing.T) {
 	for reg, w := range want {
 		if got := tr.demod[reg]; got != w {
 			t.Errorf("demod page 1 reg %#x = %#x, want %#x", reg&0xff, got, w)
+		}
+	}
+}
+
+// Bias tee drives GPIO 0 without disturbing the Blog V4 RF switch on
+// GPIO 5, which tuning to VHF sets.
+func TestSetBiasTee(t *testing.T) {
+	tr := newSmokeTransport("RTLSDRBlog", "Blog V4")
+	d, err := Open(tr)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := d.SetFrequency(100_000_000); err != nil {
+		t.Fatalf("SetFrequency: %v", err)
+	}
+	cases := []struct {
+		on   bool
+		want byte
+	}{
+		{on: true, want: 0x21},
+		{on: false, want: 0x20},
+	}
+	for _, tc := range cases {
+		if err := d.SetBiasTee(tc.on); err != nil {
+			t.Fatalf("SetBiasTee(%v): %v", tc.on, err)
+		}
+		if got := tr.sys[0x3001]; got != tc.want { // GPO
+			t.Errorf("SetBiasTee(%v): GPO = %#x, want %#x", tc.on, got, tc.want)
+		}
+		if got := tr.sys[0x3003]; got&0x01 == 0 { // GPOE
+			t.Errorf("SetBiasTee(%v): GPIO 0 not an output, GPOE = %#x", tc.on, got)
 		}
 	}
 }

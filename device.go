@@ -7,9 +7,14 @@ import (
 	"sync"
 
 	"github.com/dim13/r82xx/demod"
+	"github.com/dim13/r82xx/gpio"
 	"github.com/dim13/r82xx/tuner"
 	"github.com/dim13/r82xx/wire"
 )
+
+// biasTeePin is the GPIO switching DC onto the antenna input (RFC
+// §7.9); GPIO 0 on the Blog V4 and other boards with a bias tee.
+const biasTeePin = 0
 
 // Device is an opened RTL2832U + R820T/R828D receiver (RFC §14
 // walkthrough).
@@ -309,6 +314,18 @@ func (d *Device) SetAGC(on bool) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return demod.SetAGC(d.t, on)
+}
+
+// SetBiasTee switches DC power onto the antenna input, for an
+// external LNA. DC into a shorted or DC-coupled antenna can damage
+// equipment.
+func (d *Device) SetBiasTee(on bool) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := gpio.ConfigurePin(d.t, biasTeePin, true); err != nil {
+		return err
+	}
+	return gpio.WritePin(d.t, biasTeePin, on)
 }
 
 // Gain reads back the currently applied composite gain as mixer/LNA

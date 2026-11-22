@@ -63,7 +63,7 @@ func Open(t wire.Transport) (*Device, error) {
 	blogV4 := typ == tuner.R828D && manufacturer == "RTLSDRBlog" && product == "Blog V4"
 	crystalHz := tuner.NominalCrystalHz(typ, blogV4)
 
-	if err := demod.ApplyR820TR828D(t, crystalHz); err != nil {
+	if err := demod.ApplyR820TR828D(t, demod.NominalCrystalHz); err != nil {
 		demod.RepeaterDisable(t)
 		return nil, err
 	}
@@ -226,16 +226,24 @@ func (d *Device) SetBandwidth(hz float64, currentSampleRateHz float64) error {
 	if hz == 0 {
 		hz = currentSampleRateHz
 	}
+	var ifHz float64
 	err := demod.WithRepeater(d.t, func() error {
-		if _, err := d.tuner.SetBandwidth(hz); err != nil {
-			return err
-		}
-		if d.haveFrequency {
-			return d.tuneLocked(d.lastFrequencyHz)
-		}
-		return nil
+		var err error
+		ifHz, err = d.tuner.SetBandwidth(hz)
+		return err
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	// The demodulator must mix down from wherever the tuner now
+	// delivers the IF, or the band lands outside the sampled span.
+	if err := demod.SetIF(d.t, ifHz, d.demodCrystalHz); err != nil {
+		return err
+	}
+	if !d.haveFrequency {
+		return nil
+	}
+	return demod.WithRepeater(d.t, func() error { return d.tuneLocked(d.lastFrequencyHz) })
 }
 
 // SetGain applies one overall RF gain value from GainSteps (RFC §9

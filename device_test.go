@@ -14,6 +14,7 @@ type smokeTransport struct {
 	manufacturer, product string
 	i2c                   map[uint8]map[uint8]byte
 	pendingReg            map[uint8]uint8
+	demod                 map[uint16]byte // page<<8 | addr
 }
 
 func newSmokeTransport(manufacturer, product string) *smokeTransport {
@@ -44,6 +45,12 @@ func (s *smokeTransport) ControlIn(wValue, wIndex uint16, data []byte) (int, err
 }
 
 func (s *smokeTransport) ControlOut(wValue, wIndex uint16, data []byte) error {
+	if wValue&0xff == 0x20 && wIndex&0x10 != 0 && len(data) == 1 { // demod page write
+		if s.demod == nil {
+			s.demod = map[uint16]byte{}
+		}
+		s.demod[(wIndex&0x0f)<<8|wValue>>8] = data[0]
+	}
 	if wIndex&0xff00 == 0x0600 { // I2C block (wire.blockI2C)
 		slave := uint8(wValue >> 1)
 		if len(data) == 1 {
@@ -211,5 +218,25 @@ func TestOpenNoTuner(t *testing.T) {
 	delete(tr.i2c, 0x3a) // no chip answers
 	if _, err := Open(tr); err == nil {
 		t.Error("Open: expected an error when no tuner responds")
+	}
+}
+
+// SetBandwidth must move the demodulator IF to where the tuner now
+// delivers it: at 2.048MHz the tuner moves its IF to 1.53MHz.
+func TestSetBandwidthUpdatesIF(t *testing.T) {
+	tr := newSmokeTransport("RTLSDRBlog", "Blog V4")
+	d, err := Open(tr)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := d.SetBandwidth(0, 2_048_000); err != nil {
+		t.Fatalf("SetBandwidth: %v", err)
+	}
+	// -round(1.53e6 * 2^22 / 28.8e6) as 22-bit two's complement
+	want := map[uint16]byte{0x119: 0x3c, 0x11a: 0x99, 0x11b: 0x9a}
+	for reg, w := range want {
+		if got := tr.demod[reg]; got != w {
+			t.Errorf("demod page 1 reg %#x = %#x, want %#x", reg&0xff, got, w)
+		}
 	}
 }

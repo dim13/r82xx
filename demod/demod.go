@@ -128,7 +128,7 @@ func PowerDown(t wire.Transport) error {
 	return wire.WriteReg(t, wire.BlockSys, wire.DemodCtl, 0x20, 1)
 }
 
-// setIF programs the 22-bit two's-complement IF NCO phase-increment
+// SetIF programs the 22-bit two's-complement IF NCO phase-increment
 // register (RFC §7.3):
 //
 //	reg = -round(ifHz * 2^22 / crystalHz)
@@ -136,7 +136,7 @@ func PowerDown(t wire.Transport) error {
 // split MSB-first across page-1 registers 0x19 (bits 21:16, masked to
 // 6 bits), 0x1A (bits 15:8) and 0x1B (bits 7:0). MUST be recomputed
 // against the current PPM-corrected crystal value on every change.
-func setIF(t wire.Transport, ifHz float64, crystalHz float64) error {
+func SetIF(t wire.Transport, ifHz float64, crystalHz float64) error {
 	v := ifRegValue(ifHz, crystalHz)
 	if err := demodWriteReg(t, 1, 0x19, uint16((v>>16)&0x3f), 1); err != nil {
 		return err

@@ -50,7 +50,7 @@ func ApplyR820TR828D(t wire.Transport, crystalHz float64) error {
 	if err := demodWriteReg(t, 0, 0x08, 0x4d, 1); err != nil { // I-ADC path only
 		return err
 	}
-	if err := setIF(t, DefaultIFHz, crystalHz); err != nil {
+	if err := SetIF(t, DefaultIFHz, crystalHz); err != nil {
 		return err
 	}
 	return setSpectrumInversion(t, true)

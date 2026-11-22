@@ -39,7 +39,7 @@ func EnableDirectSampling(t wire.Transport, mode DirectSamplingMode) error {
 // sequence (step 1) and re-applying the tuned frequency (step 5) are
 // the caller's responsibility.
 func DisableDirectSamplingR828D(t wire.Transport, crystalHz float64) error {
-	if err := setIF(t, DefaultIFHz, crystalHz); err != nil {
+	if err := SetIF(t, DefaultIFHz, crystalHz); err != nil {
 		return err
 	}
 	if err := setSpectrumInversion(t, true); err != nil {
@@ -50,7 +50,7 @@ func DisableDirectSamplingR828D(t wire.Transport, crystalHz float64) error {
 
 // DisableDirectSamplingOther runs the non-R820T/R828D-family branch.
 func DisableDirectSamplingOther(t wire.Transport, crystalHz float64) error {
-	if err := setIF(t, 0, crystalHz); err != nil {
+	if err := SetIF(t, 0, crystalHz); err != nil {
 		return err
 	}
 	if err := demodWriteReg(t, 0, 0x08, 0xcd, 1); err != nil {

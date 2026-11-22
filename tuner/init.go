@@ -39,19 +39,18 @@ func (tu *Tuner) Standby() error {
 // values permanently: no runtime image-rejection calibration is
 // implemented, matching the reference behavior (RFC §10.10 step 5).
 var powerUpDefaults = [27]byte{
-	0x80, 0x13, 0x70, 0xc0, 0x40, 0xdb, 0x6b, 0xeb, // 0x05-0x0c
+	0x00, 0x12, 0x70, 0xc0, 0x40, 0xdb, 0x6b, 0xeb, // 0x05-0x0c
 	0x53, 0x75, 0x68, 0x6c, 0xbb, 0x80, 0x31, 0x00, // 0x0d-0x14
 	0x00, 0xc0, 0x30, 0x48, 0xec, 0x60, 0x00, 0x24, // 0x15-0x1c
-	0xdd, 0x0e, 0x40, // 0x1d-0x1f
+	0xdd, 0x6e, 0x40, // 0x1d-0x1f
 }
 
 // PowerUp runs the tuner's power-up initialization sequence over the
 // I2C repeater (RFC §10.10): writes the fixed default register block,
 // runs filter self-calibration at the 56MHz reference / 3.570MHz
-// IF-center scratch point, then sets the digital-receive operating
-// point (lowest AGC take-off point, 80ms AGC clock) -- the only mode
-// this package targets; an analog-TV-style alternative exists in the
-// register definitions but is out of scope here.
+// IF-center scratch point, then sets the AGC clock. The defaults
+// match the register state the reference driver leaves after its own
+// power-up, as captured on the wire.
 func (tu *Tuner) PowerUp() error {
 	for i, v := range powerUpDefaults {
 		if err := tu.writeReg(uint8(0x05+i), v); err != nil {
@@ -68,12 +67,6 @@ func (tu *Tuner) PowerUp() error {
 		return err
 	}
 
-	if err := tu.writeReg(0x1c, 0xf4); err != nil { // take-off point 15 (lowest)
-		return err
-	}
-	if err := tu.writeReg(0x1d, 0xff); err != nil { // LTOP/STOP lowest
-		return err
-	}
 	if err := tu.setField(0x1a, 0x30, 4, 0b10); err != nil { // 80ms AGC clock
 		return err
 	}

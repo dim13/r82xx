@@ -417,7 +417,7 @@ func (tu *Tuner) ApplyBand(loHz float64) error {
 	if err := tu.writeReg(0x1b, row.cornerByte); err != nil {
 		return err
 	}
-	if err := tu.setField(0x10, 0x03, 0, 0x00); err != nil { // crystal cap: fixed 0pF
+	if err := tu.setField(0x10, 0x0b, 0, 0x00); err != nil { // crystal cap 0pF, high drive
 		return err
 	}
 	return tu.setField(0x17, 0x08, 3, boolBit(row.notchLowZ))

@@ -103,21 +103,31 @@ func TestLookupBand(t *testing.T) {
 	}
 }
 
-func TestNearestNarrowRow(t *testing.T) {
+func TestSetBandwidth(t *testing.T) {
 	cases := []struct {
-		hz          float64
-		wantNominal float64
+		hz     float64
+		reg0b  byte
+		wantIF float64
 	}{
-		{290_000, 290_000},
-		{0, 290_000},       // below first row: clamps to first
-		{330_000, 290_000}, // midpoint(290k,375k)=332.5k
-		{340_000, 375_000},
-		{5_000_000, 5_000_000},
-		{10_000_000, 5_000_000}, // above last row: clamps to last
+		{hz: 1_024_000, reg0b: 0xeb, wantIF: 1_700_000}, // captured from the reference driver
+		{hz: 2_048_000, reg0b: 0xef, wantIF: 1_450_000},
+		{hz: 2_400_000, reg0b: 0xaf, wantIF: 1_625_000},
+		{hz: 250_000, reg0b: 0xe6, wantIF: 2_125_000},
+		{hz: 3_200_000, reg0b: 0x6b, wantIF: 3_570_000},
+		{hz: 8_000_000, reg0b: 0x0b, wantIF: 4_570_000},
 	}
 	for _, tc := range cases {
-		if got := nearestNarrowRow(tc.hz).nominalHz; got != tc.wantNominal {
-			t.Errorf("nearestNarrowRow(%v).nominalHz = %v, want %v", tc.hz, got, tc.wantNominal)
+		tu := New(&fakeTransport{}, R828D, BlogV4CrystalHz, true)
+		tu.regs[0x0b] = 0x6b // power-up value; bit 4 must survive
+		got, err := tu.SetBandwidth(tc.hz)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != tc.wantIF {
+			t.Errorf("SetBandwidth(%v) IF = %v, want %v", tc.hz, got, tc.wantIF)
+		}
+		if got, want := tu.regs[0x0b], tc.reg0b; got != want {
+			t.Errorf("SetBandwidth(%v) reg 0x0b = %#x, want %#x", tc.hz, got, want)
 		}
 	}
 }

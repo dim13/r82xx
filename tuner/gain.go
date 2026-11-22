@@ -30,19 +30,28 @@ var GainSteps = [29]int{
 // mixer mode bit (0x07 bit4) = 1 -- opposite polarity between the two
 // fields.
 func (tu *Tuner) SetGainAuto() error {
-	return tu.setGainMode(0, 1)
+	return tu.setGainMode(0, 1, 0x0b)
 }
 
 // SetGainManual switches LNA and mixer to manual gain control.
 func (tu *Tuner) SetGainManual() error {
-	return tu.setGainMode(1, 0)
+	return tu.setGainMode(1, 0, 0x08)
 }
 
-func (tu *Tuner) setGainMode(lna, mix byte) error {
+// setGainMode also fixes the VGA as the reference driver does: code
+// 11 (26.5dB) in automatic mode, code 8 (16.3dB) in manual mode, with
+// 0x0C bits 7 and 4 cleared. A Blog V4 keeps its pinned code.
+func (tu *Tuner) setGainMode(lna, mix, vga byte) error {
+	if tu.blogV4 {
+		vga = blogV4FixedVGACode
+	}
 	if err := tu.setField(0x05, 0x10, 4, lna); err != nil {
 		return err
 	}
-	return tu.setField(0x07, 0x10, 4, mix)
+	if err := tu.setField(0x07, 0x10, 4, mix); err != nil {
+		return err
+	}
+	return tu.setField(0x0c, 0x9f, 0, vga)
 }
 
 // SetLNAGain sets the manual LNA gain code (0-15).

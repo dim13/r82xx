@@ -1,5 +1,7 @@
 package tuner
 
+import "github.com/dim13/r82xx/gpio"
+
 // RTL-SDR Blog V4 board-specific behavior (RFC §11), layered on top of
 // plain R828D behavior and active only once board identification
 // (§4/§8, manufacturer/product strings "RTLSDRBlog"/"Blog V4") has
@@ -11,6 +13,9 @@ package tuner
 // choice (spectral pumping / intermodulation with auto VGA), not a
 // limitation to fix.
 const blogV4FixedVGACode = 8
+
+// blogV4SwitchPin is the GPIO driving the VHF/UHF vs. HF RF switch.
+const blogV4SwitchPin = 5
 
 // UpconvertHF applies the HF upconversion of §11.2: a request below
 // 28.8MHz is silently retuned by +28.8MHz. MUST run before IF
@@ -85,6 +90,13 @@ func (tu *Tuner) ApplyInputSwitch(originalHz float64) error {
 		cable2, cable1, airDeselect = 0, 0, 0
 	}
 	if err := tu.setField(0x06, 0x08, 3, cable2); err != nil {
+		return err
+	}
+	// Newer V4 batches route VHF/UHF through an RF switch on GPIO 5.
+	if err := gpio.ConfigurePin(tu.t, blogV4SwitchPin, true); err != nil {
+		return err
+	}
+	if err := gpio.WritePin(tu.t, blogV4SwitchPin, band != inputHF); err != nil {
 		return err
 	}
 	insel := cable1<<1 | airDeselect

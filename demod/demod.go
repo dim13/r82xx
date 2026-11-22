@@ -100,6 +100,7 @@ func BasebandInit(t wire.Transport) error {
 		{1, 0x93, 0xf0},
 		{1, 0x94, 0x0f},
 		{1, 0x11, 0x00}, // (unverified, §15) no measurable effect
+		{1, 0x04, 0x00}, // digital AGC off
 		{0, 0x61, 0x60}, // disable DVB-T packet filter
 		{0, 0x06, 0x80}, // default ADC I/Q routing
 		{1, 0xb1, 0x1b}, // zero-IF + DC offset cancel + I/Q imbalance comp

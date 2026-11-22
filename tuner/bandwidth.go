@@ -1,93 +1,64 @@
 package tuner
 
-// bwRow is one entry of the narrow (<=4.5MHz) bandwidth table (RFC
-// Table 12, 18 rows).
-type bwRow struct {
-	nominalHz           float64
-	deliveredIFHz       float64
-	reg0a, reg0b, reg1e byte
+// ifLowPassHz are the IF low-pass filter corners selectable in
+// register 0x0B bits 3:0 (code 15-i), widest first.
+var ifLowPassHz = [...]float64{
+	1_700_000, 1_600_000, 1_550_000, 1_450_000, 1_200_000,
+	900_000, 700_000, 550_000, 450_000, 350_000,
 }
 
-var narrowBandwidthTable = []bwRow{
-	{290_000, 1_925_000, 0x0f, 0xe7, 0x00},
-	{375_000, 1_857_000, 0x0f, 0xe8, 0x00},
-	{420_000, 2_121_000, 0x0f, 0xd7, 0x00},
-	{470_000, 1_788_000, 0x0f, 0xe9, 0x00},
-	{600_000, 1_706_000, 0x0f, 0xea, 0x00},
-	{860_000, 1_558_000, 0x0f, 0xeb, 0x00},
-	{950_000, 2_205_000, 0x0f, 0x88, 0x00},
-	{1_100_000, 2_125_000, 0x0f, 0x89, 0x00},
-	{1_200_000, 1_350_000, 0x0f, 0xee, 0x00},
-	{1_300_000, 2_043_000, 0x0f, 0x8a, 0x00},
-	{1_503_000, 1_276_000, 0x0f, 0xef, 0x60},
-	{1_600_000, 1_900_000, 0x0f, 0x8b, 0x00},
-	{1_753_000, 1_412_000, 0x0f, 0xcf, 0x60},
-	{1_800_000, 1_400_000, 0x0f, 0xaf, 0x00},
-	{1_953_000, 1_530_000, 0x0f, 0x8f, 0x60},
-	{2_200_000, 1_600_000, 0x0f, 0x8f, 0x00},
-	{3_000_000, 2_000_000, 0x04, 0x8f, 0x00},
-	{5_000_000, 3_570_000, 0x0b, 0x6b, 0x00}, // default / init-time bandwidth
-}
+// IF high-pass filter steps (register 0x0B bits 6:5).
+const (
+	hpStep1Hz = 350_000
+	hpStep2Hz = 380_000
+)
 
-type bwPreset struct {
-	minHz, maxHz  float64 // (minHz, maxHz], except the first row which is (7MHz, +inf)
-	deliveredIFHz float64
-	reg0a, reg0b  byte
-}
-
-// wideBandwidthPresets covers requested bandwidths above 4.5MHz (RFC
-// Table 11).
-var wideBandwidthPresets = []bwPreset{
-	{7_000_000, 1 << 62, 4_570_000, 0x10, 0x0b},
-	{6_000_000, 7_000_000, 4_570_000, 0x10, 0x2a},
-	{4_500_000, 6_000_000, 3_570_000, 0x10, 0x6b},
-}
-
-// nearestNarrowRow picks the row whose nominal bandwidth is closest to
-// hz, comparing against the midpoint between adjacent entries.
-func nearestNarrowRow(hz float64) bwRow {
-	rows := narrowBandwidthTable
-	i := 0
-	for i < len(rows)-1 {
-		mid := (rows[i].nominalHz + rows[i+1].nominalHz) / 2
-		if hz <= mid {
-			break
-		}
-		i++
-	}
-	return rows[i]
-}
-
-// SetBandwidth applies the channel/IF filter bandwidth closest to hz
-// (RFC §10.5) and returns the resulting delivered IF center, which
-// callers MUST feed into the next LO retune (§10.3 step 3).
+// SetBandwidth programs the IF filter for a channel of hz (RFC §10.5)
+// and returns the IF center the tuner now delivers, which the caller
+// must also program into the demodulator. Follows the reference
+// driver as observed on the wire: wide presets above ~2.43MHz,
+// otherwise high-pass steps plus the nearest low-pass corner around a
+// 2.3MHz base IF. Registers 0x0A/0x0B are written masked, so their
+// other fields (filter current, calibration code) survive.
 func (tu *Tuner) SetBandwidth(hz float64) (deliveredIFHz float64, err error) {
-	if hz > 4_500_000 {
-		for _, p := range wideBandwidthPresets {
-			if hz > p.minHz && hz <= p.maxHz {
-				if err := tu.writeReg(0x0a, p.reg0a); err != nil {
-					return 0, err
-				}
-				if err := tu.writeReg(0x0b, p.reg0b); err != nil {
-					return 0, err
-				}
-				tu.ifCenterHz = p.deliveredIFHz
-				return p.deliveredIFHz, nil
-			}
+	var reg0a, reg0b byte
+	switch {
+	case hz > 7_000_000:
+		reg0a, reg0b, deliveredIFHz = 0x10, 0x0b, 4_570_000
+	case hz > 6_000_000:
+		reg0a, reg0b, deliveredIFHz = 0x10, 0x2a, 4_570_000
+	case hz > ifLowPassHz[0]+hpStep1Hz+hpStep2Hz:
+		reg0a, reg0b, deliveredIFHz = 0x10, 0x6b, 3_570_000
+	default:
+		reg0b = 0xa0 // 0x20: high-pass step 2 off, always below the presets
+		ifHz, realBW := 2_300_000.0, 0.0
+		if hz > ifLowPassHz[0]+hpStep1Hz {
+			hz -= hpStep1Hz
+			ifHz += hpStep1Hz
+			realBW = hpStep1Hz
+		} else {
+			reg0b |= 0x40 // high-pass step 1 off
 		}
+		// Narrowest corner still wider than hz; the reference indexes
+		// one before the first narrower corner, clamped here at the
+		// widest.
+		i := 0
+		for i < len(ifLowPassHz) && hz <= ifLowPassHz[i] {
+			i++
+		}
+		i = max(i-1, 0)
+		reg0b |= byte(15 - i)
+		realBW += ifLowPassHz[i]
+		deliveredIFHz = ifHz - realBW/2
 	}
-	row := nearestNarrowRow(hz)
-	if err := tu.writeReg(0x0a, row.reg0a); err != nil {
+	if err := tu.setField(0x0a, 0x10, 0, reg0a); err != nil {
 		return 0, err
 	}
-	if err := tu.writeReg(0x0b, row.reg0b); err != nil {
+	if err := tu.setField(0x0b, 0xef, 0, reg0b); err != nil {
 		return 0, err
 	}
-	if err := tu.writeReg(0x1e, row.reg1e); err != nil {
-		return 0, err
-	}
-	tu.ifCenterHz = row.deliveredIFHz
-	return row.deliveredIFHz, nil
+	tu.ifCenterHz = deliveredIFHz
+	return deliveredIFHz, nil
 }
 
 // filterSelfCalibrate runs the calibration procedure of RFC §10.5

@@ -222,18 +222,18 @@ func TestOpenNoTuner(t *testing.T) {
 }
 
 // SetBandwidth must move the demodulator IF to where the tuner now
-// delivers it: at 2.048MHz the tuner moves its IF to 1.53MHz.
+// delivers it. Expected values are what the reference driver writes
+// at 1.024MS/s (IF 1.7MHz), captured on the wire.
 func TestSetBandwidthUpdatesIF(t *testing.T) {
 	tr := newSmokeTransport("RTLSDRBlog", "Blog V4")
 	d, err := Open(tr)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if err := d.SetBandwidth(0, 2_048_000); err != nil {
+	if err := d.SetBandwidth(0, 1_024_000); err != nil {
 		t.Fatalf("SetBandwidth: %v", err)
 	}
-	// -round(1.53e6 * 2^22 / 28.8e6) as 22-bit two's complement
-	want := map[uint16]byte{0x119: 0x3c, 0x11a: 0x99, 0x11b: 0x9a}
+	want := map[uint16]byte{0x119: 0x3c, 0x11a: 0x38, 0x11b: 0xe4}
 	for reg, w := range want {
 		if got := tr.demod[reg]; got != w {
 			t.Errorf("demod page 1 reg %#x = %#x, want %#x", reg&0xff, got, w)

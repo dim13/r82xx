@@ -11,6 +11,7 @@ type demodWrite struct {
 // tests: it always succeeds, echoes zero bytes on read, and records
 // every demodulator paged-register write for assertions.
 type fakeTransport struct {
+	controlOuts [][2]uint16 // wValue, wIndex
 	demodWrites []demodWrite
 }
 
@@ -19,6 +20,7 @@ func (f *fakeTransport) ControlIn(wValue, wIndex uint16, data []byte) (int, erro
 }
 
 func (f *fakeTransport) ControlOut(wValue, wIndex uint16, data []byte) error {
+	f.controlOuts = append(f.controlOuts, [2]uint16{wValue, wIndex})
 	if wValue&0xff == 0x20 && wIndex&0x10 != 0 && len(data) == 1 {
 		f.demodWrites = append(f.demodWrites, demodWrite{
 			page: uint8(wIndex & 0x0f),
@@ -125,6 +127,27 @@ func TestWriteFIRPacking(t *testing.T) {
 	for i, w := range want {
 		if got := ft.demodWrites[8+i].val; got != w {
 			t.Errorf("packed byte %d = %#x, want %#x", i, got, w)
+		}
+	}
+}
+
+// The USB and system block writes must hit the real register
+// addresses; an unmapped address STALLs the control pipe.
+func TestBasebandInitAddresses(t *testing.T) {
+	ft := &fakeTransport{}
+	if err := BasebandInit(ft); err != nil {
+		t.Fatal(err)
+	}
+	want := [][2]uint16{
+		{0x2000, 0x0110}, // USB_SYSCTL
+		{0x2158, 0x0110}, // USB_EPA_MAXPKT
+		{0x2148, 0x0110}, // USB_EPA_CTL
+		{0x300b, 0x0210}, // DEMOD_CTL_1
+		{0x3000, 0x0210}, // DEMOD_CTL
+	}
+	for i, w := range want {
+		if got := ft.controlOuts[i]; got != w {
+			t.Errorf("write %d = %#04x, want %#04x", i, got, w)
 		}
 	}
 }

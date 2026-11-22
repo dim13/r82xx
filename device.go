@@ -118,6 +118,12 @@ func (d *Device) Chip() tuner.Type {
 	return d.tuner.Chip
 }
 
+// BlogV4 reports whether the board is an RTL-SDR Blog V4, which
+// reaches HF through its upconverter.
+func (d *Device) BlogV4() bool {
+	return d.blogV4
+}
+
 // SetSampleRate sets the demodulator resampler ratio (RFC §7.5),
 // rewriting the PPM fine trim and re-triggering a soft reset.
 func (d *Device) SetSampleRate(hz uint32) (achievedHz float64, err error) {

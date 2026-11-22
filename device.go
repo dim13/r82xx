@@ -295,6 +295,14 @@ func (d *Device) SetGainManual() error {
 	return demod.WithRepeater(d.t, d.tuner.SetGainManual)
 }
 
+// SetAGC switches the demodulator's internal digital AGC, independent
+// of tuner gain mode (RFC §7.6).
+func (d *Device) SetAGC(on bool) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return demod.SetAGC(d.t, on)
+}
+
 // Gain reads back the currently applied composite gain as mixer/LNA
 // codes (RFC §9 "Get gain (composite)").
 func (d *Device) Gain() (mixer, lna int, err error) {

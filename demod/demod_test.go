@@ -151,3 +151,23 @@ func TestBasebandInitAddresses(t *testing.T) {
 		}
 	}
 }
+
+func TestSetAGC(t *testing.T) {
+	cases := []struct {
+		on   bool
+		want byte
+	}{
+		{on: true, want: 0x25},
+		{on: false, want: 0x05},
+	}
+	for _, tc := range cases {
+		ft := &fakeTransport{}
+		if err := SetAGC(ft, tc.on); err != nil {
+			t.Fatal(err)
+		}
+		want := demodWrite{page: 0, addr: 0x19, val: tc.want}
+		if got := ft.demodWrites; len(got) != 1 || got[0] != want {
+			t.Errorf("SetAGC(%v) wrote %v, want %v", tc.on, got, want)
+		}
+	}
+}

@@ -113,6 +113,15 @@ func BasebandInit(t wire.Transport) error {
 	return nil
 }
 
+// SetAGC switches the demodulator's internal digital AGC (RFC §7.6,
+// page 0 register 0x19). It leaves test mode off.
+func SetAGC(t wire.Transport, on bool) error {
+	if on {
+		return demodWriteReg(t, 0, 0x19, 0x25, 1)
+	}
+	return demodWriteReg(t, 0, 0x19, 0x05, 1)
+}
+
 // PowerDown powers off the demodulator and ADCs (RFC §7.1 step 5,
 // device-close direction: same register takes 0x20 on power-down).
 func PowerDown(t wire.Transport) error {

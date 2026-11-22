@@ -113,6 +113,11 @@ func (d *Device) Close() error {
 	return err
 }
 
+// Chip reports the detected tuner, R820T or R828D.
+func (d *Device) Chip() tuner.Type {
+	return d.tuner.Chip
+}
+
 // SetSampleRate sets the demodulator resampler ratio (RFC §7.5),
 // rewriting the PPM fine trim and re-triggering a soft reset.
 func (d *Device) SetSampleRate(hz uint32) (achievedHz float64, err error) {
